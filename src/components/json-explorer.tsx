@@ -2,17 +2,17 @@
 "use client";
 
 import * as React from "react";
-import { useState, useEffect, useCallback, useRef, useMemo } from "react"; // Added useMemo
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { ClipboardCopy, Search, Rows, Pencil, ChevronLeft, ChevronRight } from "lucide-react";
+import { ClipboardCopy, Search, Rows, Pencil, ChevronLeft, ChevronRight, ChevronsDownUp, ChevronsUpDown } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import JsonTreeNode from "./json-tree-node";
-import { get, isObject, isArray, escapeRegExp } from 'lodash-es'; // Using lodash get for safe path access
+import { get, isObject, isArray, escapeRegExp } from 'lodash-es';
 
 type ViewMode = "tree" | "edit";
 
@@ -27,7 +27,8 @@ const exampleJson = `{
     "Tree View",
     "Path Preview",
     "Search with Highlighting",
-    "Result Navigation"
+    "Result Navigation",
+    "Expand/Collapse All"
   ],
   "settings": {
     "theme": "light",
@@ -51,7 +52,7 @@ const exampleJson = `{
 
 
 // Helper function to find all matching paths in the JSON data
-const findMatches = (value: any, searchTerm: string, currentPath: string, results: string[]): void => {
+const findMatches = (value: any, searchTerm: string, currentPath: string, results: { path: string; elementRef: React.RefObject<HTMLDivElement> }[], elementRefs: React.MutableRefObject<Map<string, React.RefObject<HTMLDivElement>>>): void => {
     if (!searchTerm) return;
 
     const safeSearchTerm = escapeRegExp(searchTerm.toLowerCase());
@@ -59,35 +60,118 @@ const findMatches = (value: any, searchTerm: string, currentPath: string, result
 
     if (isObject(value)) {
         Object.entries(value).forEach(([key, childValue]) => {
-            const newPath = isArray(value) ? `${currentPath}[${key}]` : `${currentPath ? currentPath + '.' : ''}${key}`;
-            const displayPath = isArray(value) ? `${currentPath}[${key}]` : `${currentPath ? currentPath + '.' : '$'}${key}`; // Path used for display/internal logic might differ
+             // Handle root object keys correctly (prepend '$') vs. nested keys/indices
+            const isRootObject = currentPath === '$' && !isArray(value);
+            const newPath = isArray(value)
+                ? `${currentPath}[${key}]`
+                : (isRootObject ? `$.${key}` : `${currentPath}.${key}`);
 
-             // Prepend '$' if currentPath is empty (for root object keys)
-             const searchPath = currentPath === '$' ? displayPath : (isArray(value) ? `${currentPath}[${key}]` : `${currentPath}.${key}`);
+            // Ensure ref exists for this path
+            if (!elementRefs.current.has(newPath)) {
+                elementRefs.current.set(newPath, React.createRef<HTMLDivElement>());
+            }
+            const currentRef = elementRefs.current.get(newPath)!;
 
 
             // Check if key matches
             if (regex.test(key)) {
-                results.push(searchPath);
+                 // Avoid duplicates
+                 if (!results.some(r => r.path === newPath)) {
+                    results.push({ path: newPath, elementRef: currentRef });
+                 }
             }
 
             // Check if primitive value matches
             if (!isObject(childValue) && childValue !== null && regex.test(String(childValue))) {
-                 // Only add if path is not already added via key match
-                 if (!results.includes(searchPath)) {
-                    results.push(searchPath);
+                 // Avoid duplicates and only add if path is not already added via key match
+                 if (!results.some(r => r.path === newPath)) {
+                    results.push({ path: newPath, elementRef: currentRef });
                  }
             }
 
             // Recurse into children
-            findMatches(childValue, searchTerm, searchPath, results);
+            findMatches(childValue, searchTerm, newPath, results, elementRefs);
         });
     } else if (isArray(value)) {
          value.forEach((item, index) => {
              const newPath = `${currentPath}[${index}]`;
-             findMatches(item, searchTerm, newPath, results);
+             // Ensure ref exists for this path
+            if (!elementRefs.current.has(newPath)) {
+                elementRefs.current.set(newPath, React.createRef<HTMLDivElement>());
+            }
+             findMatches(item, searchTerm, newPath, results, elementRefs);
          });
     }
+};
+
+// Helper function to get all paths that represent expandable nodes (objects/arrays with content)
+const getAllExpandablePaths = (value: any, currentPath: string = '$', paths: Set<string> = new Set()): Set<string> => {
+    if (isObject(value) && Object.keys(value).length > 0) {
+        paths.add(currentPath); // Add current path if it's an expandable node
+        Object.entries(value).forEach(([key, childValue]) => {
+            const isRootObject = currentPath === '$' && !isArray(value);
+            const newPath = isArray(value)
+                ? `${currentPath}[${key}]`
+                : (isRootObject ? `$.${key}` : `${currentPath}.${key}`);
+            getAllExpandablePaths(childValue, newPath, paths);
+        });
+    } else if (isArray(value) && value.length > 0) {
+        paths.add(currentPath);
+        value.forEach((item, index) => {
+            const newPath = `${currentPath}[${index}]`;
+            getAllExpandablePaths(item, newPath, paths);
+        });
+    }
+    return paths;
+};
+
+
+// Helper to get all ancestor paths for a given path
+const getAncestorPaths = (targetPath: string): Set<string> => {
+    const ancestors = new Set<string>(['$']); // Always include root
+    if (!targetPath || targetPath === '$') return ancestors;
+
+    // Split path intelligently considering bracket notation for arrays and dot notation for objects
+    const segments: string[] = [];
+    let currentSegment = '';
+    let inBrackets = false;
+    // Start from index 1 to skip the initial '$'
+    for (let i = 1; i < targetPath.length; i++) {
+        const char = targetPath[i];
+        if (char === '.' && !inBrackets) {
+            if (currentSegment) segments.push(currentSegment);
+            currentSegment = '';
+        } else if (char === '[' && !inBrackets) {
+            if (currentSegment) segments.push(currentSegment);
+            currentSegment = '[';
+            inBrackets = true;
+        } else if (char === ']' && inBrackets) {
+            currentSegment += ']';
+            segments.push(currentSegment);
+            currentSegment = '';
+            inBrackets = false;
+        } else {
+            currentSegment += char;
+        }
+    }
+    // Add the last segment if any
+    if (currentSegment) segments.push(currentSegment);
+
+
+    let currentBuiltPath = '$';
+    // Iterate through segments, building up the path and adding ancestors
+    for (let i = 0; i < segments.length - 1; i++) { // Stop before the last segment
+        const segment = segments[i];
+        if (segment.startsWith('[')) {
+            currentBuiltPath += segment;
+        } else {
+            currentBuiltPath += (currentBuiltPath === '$' ? '.' : '.') + segment;
+        }
+        ancestors.add(currentBuiltPath);
+    }
+
+
+    return ancestors;
 };
 
 
@@ -100,48 +184,45 @@ const JsonExplorer: React.FC = () => {
   const [viewMode, setViewMode] = useState<ViewMode>("tree");
   const [searchTerm, setSearchTerm] = useState<string>("");
   const [debouncedSearchTerm, setDebouncedSearchTerm] = useState<string>("");
-  const [matchPaths, setMatchPaths] = useState<string[]>([]);
+  const [matchPaths, setMatchPaths] = useState<{ path: string; elementRef: React.RefObject<HTMLDivElement> }[]>([]);
   const [currentMatchIndex, setCurrentMatchIndex] = useState<number>(-1);
+  const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set(['$'])); // State for expanded paths
   const { toast } = useToast();
-  const scrollAreaRef = useRef<HTMLDivElement>(null); // Ref for the ScrollArea viewport
+  const scrollAreaRef = useRef<HTMLDivElement>(null);
+  const nodeElementRefs = useRef<Map<string, React.RefObject<HTMLDivElement>>>(new Map());
 
-  // Effect for parsing JSON when input changes
+
+  // Effect for parsing JSON
   useEffect(() => {
     try {
       const parsed = JSON.parse(jsonInput);
       setParsedJson(parsed);
       setError(null);
+      setExpandedPaths(new Set(['$'])); // Reset expansion on new JSON
+      nodeElementRefs.current = new Map(); // Reset refs
+      findMatches(parsed, '', '$', [], nodeElementRefs); // Pre-populate refs
     } catch (e: any) {
       setError(`Invalid JSON: ${e.message}`);
       setParsedJson(null);
-      // Clear preview immediately on parse error
       setPreviewResult("");
-      setMatchPaths([]); // Clear search results on parse error
+      setMatchPaths([]);
       setCurrentMatchIndex(-1);
+      setExpandedPaths(new Set(['$']));
+      nodeElementRefs.current = new Map();
     }
-  }, [jsonInput]); // Only depends on jsonInput
+  }, [jsonInput]);
 
-  // Effect for updating preview when path or parsed data changes
+  // Effect for updating preview
   useEffect(() => {
-    if (error) {
-        setPreviewResult("");
-        return;
-    }
-    if (parsedJson === null) {
+    if (error || parsedJson === null) {
         setPreviewResult("");
         return;
     }
     try {
-      // Adjust path for lodash 'get': remove '$' or '$.' prefix
       let adjustedPath = jsonPath;
-      if (adjustedPath === '$') {
-          adjustedPath = ''; // Root object
-      } else if (adjustedPath.startsWith('$.')) {
-          adjustedPath = adjustedPath.substring(2);
-      } else if (adjustedPath.startsWith('$[')) {
-          // Handle root arrays like $[0]
-          adjustedPath = adjustedPath.substring(1);
-      }
+      if (adjustedPath === '$') adjustedPath = '';
+      else if (adjustedPath.startsWith('$.')) adjustedPath = adjustedPath.substring(2);
+      else if (adjustedPath.startsWith('$[')) adjustedPath = adjustedPath.substring(1);
 
       const result = get(parsedJson, adjustedPath);
       setPreviewResult(result === undefined ? "undefined" : JSON.stringify(result, null, 2));
@@ -151,80 +232,120 @@ const JsonExplorer: React.FC = () => {
   }, [jsonPath, parsedJson, error]);
 
 
-  // Debounce mechanism for search term
+  // Debounce search term
   useEffect(() => {
-    const handler = setTimeout(() => {
-      setDebouncedSearchTerm(searchTerm);
-    }, 300); // 300ms debounce delay
+    const handler = setTimeout(() => setDebouncedSearchTerm(searchTerm), 300);
     return () => clearTimeout(handler);
   }, [searchTerm]);
 
-  // Effect for performing search when debounced term or parsed data changes
+  // Effect for performing search
    useEffect(() => {
-    if (!debouncedSearchTerm || parsedJson === null) {
+    if (parsedJson === null || error) {
       setMatchPaths([]);
       setCurrentMatchIndex(-1);
       return;
     }
+    // Always re-run findMatches to ensure refs are populated/updated
+    const results: { path: string; elementRef: React.RefObject<HTMLDivElement> }[] = [];
+    findMatches(parsedJson, debouncedSearchTerm, '$', results, nodeElementRefs);
 
-    const results: string[] = [];
-    findMatches(parsedJson, debouncedSearchTerm, '$', results);
-    // Ensure root matches are handled correctly, e.g., searching for the root key name
-    if (isObject(parsedJson) && !isArray(parsedJson)) {
-        Object.keys(parsedJson).forEach(key => {
-            const safeSearchTerm = escapeRegExp(debouncedSearchTerm.toLowerCase());
-            const regex = new RegExp(safeSearchTerm, 'i');
-            if (regex.test(key) && !results.some(p => p === `$.${key}`)) {
-                 // Add root key match if not already found deeper
-                 // This check might be redundant depending on findMatches logic,
-                 // but ensures root keys are considered.
-            }
-        });
+    if (!debouncedSearchTerm) {
+        setMatchPaths([]);
+        setCurrentMatchIndex(-1);
+        return;
     }
 
-    // Sort results for consistent navigation (optional)
-    // results.sort();
+    // Sort results naturally (optional, but good for consistency)
+    results.sort((a, b) => a.path.localeCompare(b.path, undefined, { numeric: true, sensitivity: 'base' }));
 
     setMatchPaths(results);
-    setCurrentMatchIndex(results.length > 0 ? 0 : -1);
-     // Automatically update JSON path and expand to the first match
-    if (results.length > 0) {
-        setJsonPath(results[0]);
+    const firstMatchIndex = results.length > 0 ? 0 : -1;
+    setCurrentMatchIndex(firstMatchIndex);
+
+    if (firstMatchIndex !== -1) {
+      const firstMatchPath = results[firstMatchIndex].path;
+      setJsonPath(firstMatchPath); // Update path input
+      // Expand all ancestors of the first match
+      setExpandedPaths(prevPaths => new Set([...prevPaths, ...getAncestorPaths(firstMatchPath)]));
+    } else {
+        // If no results found, maybe reset path or keep current? Keeping current for now.
     }
 
+  }, [debouncedSearchTerm, parsedJson, error]); // Added error dependency
 
-  }, [debouncedSearchTerm, parsedJson]);
 
-
-  // Effect to scroll to the current match when index changes
+  // Effect to scroll to the current match
   useEffect(() => {
     if (currentMatchIndex >= 0 && matchPaths.length > 0 && viewMode === 'tree') {
-      const targetPath = matchPaths[currentMatchIndex];
-      // Need a slight delay for the DOM to update, especially when nodes expand
-      setTimeout(() => {
-         const targetElement = scrollAreaRef.current?.querySelector(`[data-path="${targetPath}"]`);
-         targetElement?.scrollIntoView({
-           behavior: 'smooth',
-           block: 'center', // 'start', 'center', 'end', or 'nearest'
-         });
-      }, 100); // Adjust delay if needed
+      const currentMatch = matchPaths[currentMatchIndex];
+      const targetPath = currentMatch.path;
+      const targetElementRef = currentMatch.elementRef;
+
+      // Expand ancestors of the target path
+       setExpandedPaths(prevPaths => {
+           const ancestors = getAncestorPaths(targetPath);
+           const newPaths = new Set([...prevPaths, ...ancestors]);
+           // If the target itself is expandable, make sure it's expanded
+           if (targetElementRef?.current?.querySelector('button[aria-label="Expand"]')) {
+               newPaths.add(targetPath);
+           }
+           return newPaths;
+       });
+
+
+       // Scroll after a short delay to allow for expansion
+       const scrollTimer = setTimeout(() => {
+          const targetElement = targetElementRef.current;
+          // Check if the element exists in the DOM before scrolling
+          if (targetElement && scrollAreaRef.current?.contains(targetElement)) {
+            targetElement?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          } else {
+              // Element might not be rendered yet (if parents were collapsed)
+              // Retry scroll after another delay
+              const retryScrollTimer = setTimeout(() => {
+                    const elementAgain = targetElementRef.current;
+                    if (elementAgain && scrollAreaRef.current?.contains(elementAgain)) {
+                        elementAgain.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    }
+              }, 300); // Longer delay for retry
+               return () => clearTimeout(retryScrollTimer);
+          }
+      }, 150); // Initial delay
+
+       return () => clearTimeout(scrollTimer);
     }
-  }, [currentMatchIndex, matchPaths, viewMode]); // Run when index, paths or viewMode change
+  }, [currentMatchIndex, matchPaths, viewMode]); // Removed expandedPaths dependency to prevent potential loops
 
 
   const handleInputChange = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const newJsonInput = event.target.value;
-    setJsonInput(newJsonInput);
+    setJsonInput(event.target.value);
   };
 
   const handlePathChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const newPath = event.target.value;
-    setJsonPath(newPath);
+    setJsonPath(event.target.value);
   };
 
-  const handleNodeClick = (path: string, value: any) => {
-    setJsonPath(path); // Path from JsonTreeNode is already in '$...' format
+  // Unified handler for node click and toggle expansion
+  const handleNodeInteraction = (path: string, value: any, isToggle: boolean) => {
+    if (isToggle) {
+        setExpandedPaths(prevPaths => {
+            const newPaths = new Set(prevPaths);
+            if (newPaths.has(path)) {
+                newPaths.delete(path);
+            } else {
+                 // Ensure node exists and has children before expanding
+                 if ((isObject(value) || isArray(value)) && Object.keys(value).length > 0) {
+                    newPaths.add(path);
+                 }
+            }
+            return newPaths;
+        });
+    } else {
+        // Node click (not toggle icon) - update path preview
+        setJsonPath(path);
+    }
   };
+
 
   const copyToClipboard = (text: string, type: string) => {
     navigator.clipboard.writeText(text)
@@ -244,13 +365,11 @@ const JsonExplorer: React.FC = () => {
   };
 
   const handleCopy = (event: React.MouseEvent<HTMLButtonElement>) => {
-     if (event.button === 0) { // Left click
-         copyToClipboard(jsonPath, "JSON Path");
-     }
+     if (event.button === 0) copyToClipboard(jsonPath, "JSON Path");
   };
 
   const handleContextMenuCopy = (event: React.MouseEvent<HTMLButtonElement>) => {
-     event.preventDefault(); // Prevent default context menu
+     event.preventDefault();
      copyToClipboard(previewResult, "Preview Result");
   };
 
@@ -258,7 +377,8 @@ const JsonExplorer: React.FC = () => {
     if (matchPaths.length > 0) {
       const nextIndex = (currentMatchIndex + 1) % matchPaths.length;
       setCurrentMatchIndex(nextIndex);
-      setJsonPath(matchPaths[nextIndex]); // Update JSON path to the current match
+      setJsonPath(matchPaths[nextIndex].path); // Update path from the match object
+      // Expansion and scrolling are handled by the useEffect for currentMatchIndex
     }
   };
 
@@ -266,48 +386,20 @@ const JsonExplorer: React.FC = () => {
     if (matchPaths.length > 0) {
       const prevIndex = (currentMatchIndex - 1 + matchPaths.length) % matchPaths.length;
       setCurrentMatchIndex(prevIndex);
-      setJsonPath(matchPaths[prevIndex]); // Update JSON path to the current match
+      setJsonPath(matchPaths[prevIndex].path); // Update path from the match object
+       // Expansion and scrolling are handled by the useEffect for currentMatchIndex
     }
   };
 
-   // Get all ancestor paths for the current match to ensure they are expanded
-   const getExpandedPaths = useCallback((currentMatchPath: string): Set<string> => {
-        const paths = new Set<string>(['$']); // Always expand root
-        if (!currentMatchPath || currentMatchPath === '$') return paths;
+  const handleExpandAll = () => {
+      if (parsedJson) {
+          setExpandedPaths(getAllExpandablePaths(parsedJson));
+      }
+  };
 
-        // Improved path splitting to handle keys with dots or brackets correctly
-        let current = '$';
-        // Split path by '.' or '[' and filter out empty strings and ']'
-        const parts = currentMatchPath.substring(1) // Remove leading '$'
-            .split(/[\.\[]/) // Split by '.' or '['
-            .filter(part => part && part !== ']'); // Remove empty strings and closing brackets
-
-        parts.forEach((part, index) => {
-            const isArrayIndex = /^\d+$/.test(part);
-            if (isArrayIndex) {
-                 // It's an array index - wrap in brackets
-                 current = `${current}[${part}]`;
-            } else {
-                 // It's an object key - prepend with '.' if not the first part after '$'
-                 current = index === 0 ? `$.${part}` : `${current}.${part}`;
-            }
-
-             // Add parent paths to the set for expansion
-             if (index < parts.length -1) { // Only expand parents, not the leaf node itself
-                 paths.add(current);
-             }
-        });
-
-        return paths;
-    }, []);
-
-
-   const expandedPaths = useMemo(() => {
-        return currentMatchIndex >= 0 && matchPaths.length > 0
-            ? getExpandedPaths(matchPaths[currentMatchIndex])
-            : new Set<string>(['$']); // Default to expanding root
-    }, [currentMatchIndex, matchPaths, getExpandedPaths]);
-
+  const handleCollapseAll = () => {
+      setExpandedPaths(new Set(['$'])); // Only keep root expanded
+  };
 
   return (
     <TooltipProvider>
@@ -318,6 +410,40 @@ const JsonExplorer: React.FC = () => {
             <div className="flex justify-between items-center mb-2">
                 <CardTitle className="text-lg">JSON Input / Tree View</CardTitle>
                 <div className="flex items-center space-x-1">
+                    {/* Expand/Collapse Buttons - only in Tree view and no error */}
+                    {viewMode === 'tree' && !error && parsedJson !== null && (
+                        <>
+                            <Tooltip>
+                                <TooltipTrigger asChild>
+                                    <Button
+                                        variant="ghost"
+                                        size="icon"
+                                        className="h-8 w-8"
+                                        onClick={handleExpandAll}
+                                        aria-label="Expand All Nodes"
+                                    >
+                                        <ChevronsUpDown className="h-4 w-4" />
+                                    </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>Expand All</TooltipContent>
+                            </Tooltip>
+                            <Tooltip>
+                                <TooltipTrigger asChild>
+                                    <Button
+                                        variant="ghost"
+                                        size="icon"
+                                        className="h-8 w-8"
+                                        onClick={handleCollapseAll}
+                                        aria-label="Collapse All Nodes"
+                                    >
+                                        <ChevronsDownUp className="h-4 w-4" />
+                                    </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>Collapse All</TooltipContent>
+                            </Tooltip>
+                        </>
+                    )}
+                    {/* Tree/Edit View Toggle Buttons */}
                     <Tooltip>
                         <TooltipTrigger asChild>
                             <Button
@@ -325,7 +451,7 @@ const JsonExplorer: React.FC = () => {
                                 size="icon"
                                 className="h-8 w-8"
                                 onClick={() => setViewMode('tree')}
-                                disabled={error !== null} // Disable tree view if JSON is invalid
+                                disabled={error !== null}
                                 aria-label="Switch to Tree View"
                             >
                                 <Rows className="h-4 w-4" />
@@ -349,7 +475,7 @@ const JsonExplorer: React.FC = () => {
                     </Tooltip>
                 </div>
             </div>
-             {viewMode === 'tree' && !error && ( // Only show search if in tree view and no error
+             {viewMode === 'tree' && !error && (
                 <div className="flex items-center space-x-2">
                     <Search className="h-4 w-4 text-muted-foreground"/>
                     <Input
@@ -411,16 +537,18 @@ const JsonExplorer: React.FC = () => {
             )}
              {viewMode === 'tree' && (
                  <ScrollArea className="flex-1 border rounded-md p-2 bg-card" viewportRef={scrollAreaRef}>
-                    {parsedJson !== null && error === null ? ( // Only render tree if parsed and no error
+                    {parsedJson !== null && error === null ? (
                          <JsonTreeNode
-                            nodeKey="$" // Root node key
+                            nodeKey="$"
                             value={parsedJson}
                             level={0}
                             path="$"
-                            onNodeClick={handleNodeClick}
+                            onNodeInteraction={handleNodeInteraction} // Pass the interaction handler
                             searchTerm={debouncedSearchTerm}
-                            highlightPath={currentMatchIndex >= 0 ? matchPaths[currentMatchIndex] : undefined} // Pass the current match path
-                            expandedPaths={expandedPaths} // Pass the set of paths to expand
+                            highlightPath={currentMatchIndex >= 0 ? matchPaths[currentMatchIndex].path : undefined}
+                            expandedPaths={expandedPaths} // Pass the managed expansion state
+                            elementRef={nodeElementRefs.current.get('$') || (nodeElementRefs.current.set('$', React.createRef<HTMLDivElement>()), nodeElementRefs.current.get('$'))!} // Pass ref for root
+                            nodeElementRefs={nodeElementRefs} // Pass the refs map
                         />
                     ) : (
                         <div className="text-muted-foreground p-4 text-center">
@@ -430,7 +558,7 @@ const JsonExplorer: React.FC = () => {
                 </ScrollArea>
              )}
 
-             {error && viewMode === 'edit' && ( // Show error only in edit mode
+             {error && viewMode === 'edit' && (
                 <p className="text-destructive text-xs mt-1 px-1">{error}</p>
              )}
           </CardContent>
@@ -448,7 +576,7 @@ const JsonExplorer: React.FC = () => {
                 placeholder="Enter JSON Path (e.g., $.users[0].name)"
                 className="flex-1 font-mono text-sm h-10"
                 aria-label="JSON Path Input"
-                disabled={error !== null} // Disable path input on error
+                disabled={error !== null}
               />
                 <Tooltip>
                     <TooltipTrigger asChild>
@@ -458,7 +586,7 @@ const JsonExplorer: React.FC = () => {
                             onClick={handleCopy}
                             onContextMenu={handleContextMenuCopy}
                             aria-label="Copy Path or Result"
-                            disabled={error !== null} // Disable copy on error
+                            disabled={error !== null}
                          >
                            <ClipboardCopy className="h-4 w-4" />
                          </Button>
@@ -484,5 +612,3 @@ const JsonExplorer: React.FC = () => {
 };
 
 export default JsonExplorer;
-
-    
