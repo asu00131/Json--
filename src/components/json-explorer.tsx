@@ -9,12 +9,13 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { ClipboardCopy, Search, Rows, Pencil, ChevronLeft, ChevronRight, ChevronsDownUp, ChevronsUpDown } from "lucide-react";
+import { ClipboardCopy, Search, Rows, Pencil, ChevronLeft, ChevronRight, ChevronsDownUp, ChevronsUpDown, Binary } from "lucide-react"; // Added Binary icon
 import { useToast } from "@/hooks/use-toast";
 import JsonTreeNode from "./json-tree-node";
 import { isObject, isArray, escapeRegExp } from 'lodash-es';
 
 type ViewMode = "tree" | "edit";
+type PreviewDisplayMode = "json" | "tree";
 
 // Example JSON for initial state
 const exampleJson = `{
@@ -178,7 +179,12 @@ const evaluateJsonPath = (data: any, path: string): any => {
              // End of bracket notation
              bracketContent += ']';
              inBrackets = false;
-             segments.push(bracketContent); // Push the complete bracket segment (e.g., '[0]', '[*]')
+              // Special handling for '[*]' segment combined with a preceding key
+              if (segments.length > 0 && !segments[segments.length - 1].startsWith('[')) {
+                  segments[segments.length - 1] += bracketContent;
+              } else {
+                  segments.push(bracketContent); // Push standalone bracket segment (e.g., '[0]', '[*]')
+              }
              bracketContent = ''; // Reset bracket content
         } else if (inBrackets) {
             // Inside brackets, collect content
@@ -194,20 +200,9 @@ const evaluateJsonPath = (data: any, path: string): any => {
         segments.push(currentSegment);
     }
 
-    // Handle cases like '$.prop[*]' or '$[*]' correctly by adjusting segments
-    const processedSegments: string[] = [];
-    for (let i = 0; i < segments.length; i++) {
-        const current = segments[i];
-        const next = segments[i + 1];
 
-        if (next && next.startsWith('[') && !current.startsWith('[')) {
-            // Combine object key with its following bracket notation
-            processedSegments.push(current + next);
-            i++; // Skip the next segment as it's combined
-        } else {
-            processedSegments.push(current);
-        }
-    }
+    // Process segments (no need for combination logic here, handled during splitting)
+    const processedSegments = segments;
 
 
     return evaluatePathSegments(data, processedSegments);
@@ -308,40 +303,45 @@ const getAncestorPaths = (targetPath: string): Set<string> => {
     const segments: string[] = [];
     let currentSegment = '';
     let inBrackets = false;
+    let bracketContent = '';
 
     for (let i = 0; i < adjustedPath.length; i++) {
         const char = adjustedPath[i];
+
         if (char === '.' && !inBrackets) {
+            // End of an object key segment
             if (currentSegment) segments.push(currentSegment);
             currentSegment = '';
         } else if (char === '[' && !inBrackets) {
-            if (currentSegment) segments.push(currentSegment);
-            inBrackets = true;
-            currentSegment = '['; // Start bracket content
+            // Start of bracket notation (index or wildcard)
+             if (currentSegment) {
+                 // Store the object key segment preceding the bracket
+                 segments.push(currentSegment);
+                 currentSegment = '';
+             }
+             inBrackets = true;
+             bracketContent = '['; // Start collecting bracket content
         } else if (char === ']' && inBrackets) {
-            currentSegment += ']';
-            segments.push(currentSegment);
-            inBrackets = false;
-            currentSegment = '';
+             // End of bracket notation
+             bracketContent += ']';
+             inBrackets = false;
+              // Combine key with bracket or push standalone bracket
+              if (segments.length > 0 && !segments[segments.length - 1].startsWith('[')) {
+                  segments[segments.length - 1] += bracketContent;
+              } else {
+                  segments.push(bracketContent);
+              }
+             bracketContent = '';
+        } else if (inBrackets) {
+            bracketContent += char;
         } else {
             currentSegment += char;
         }
     }
-    if (currentSegment) segments.push(currentSegment);
+     if (currentSegment) segments.push(currentSegment);
 
-    // Combine adjacent key/bracket segments correctly
-    const combinedSegments: string[] = [];
-    for (let i = 0; i < segments.length; i++) {
-        const current = segments[i];
-        const next = segments[i + 1];
-         if (next && next.startsWith('[') && !current.startsWith('[')) {
-            combinedSegments.push(current + next);
-            i++;
-        } else {
-            combinedSegments.push(current);
-        }
-    }
-
+    // The segments are already combined correctly during splitting
+    const combinedSegments = segments;
 
     let currentBuiltPath = '$';
     // Iterate through combined segments, building up the path and adding ancestors
@@ -349,10 +349,18 @@ const getAncestorPaths = (targetPath: string): Set<string> => {
         const segment = combinedSegments[i];
          if (segment.startsWith('[')) {
             currentBuiltPath += segment; // Append bracket notation directly
-        } else if (segment.includes('[')) {
+         } else if (segment.includes('[')) {
              // Handle combined key[index/wildcard]
-             const [keyPart, bracketPart] = segment.split(/(\[.*])/);
-             currentBuiltPath += (currentBuiltPath === '$' ? '.' : '.') + keyPart + bracketPart;
+             const parts = segment.match(/^(.+?)(\[.*])$/);
+             if (parts) {
+                 const keyPart = parts[1];
+                 const bracketPart = parts[2];
+                 currentBuiltPath += (currentBuiltPath === '$' ? '.' : '.') + keyPart + bracketPart;
+             } else {
+                  // Fallback for unexpected format, treat as key
+                  currentBuiltPath += (currentBuiltPath === '$' ? '.' : '.') + segment;
+             }
+
          } else {
              // Handle simple object key
              currentBuiltPath += (currentBuiltPath === '$' ? '.' : '.') + segment;
@@ -370,7 +378,8 @@ const JsonExplorer: React.FC = () => {
   const [parsedJson, setParsedJson] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
   const [jsonPath, setJsonPath] = useState<string>("$"); // Default to root
-  const [previewResult, setPreviewResult] = useState<string>("");
+  const [previewResult, setPreviewResult] = useState<any>(undefined); // Store raw result
+  const [previewDisplayMode, setPreviewDisplayMode] = useState<PreviewDisplayMode>('json');
   const [viewMode, setViewMode] = useState<ViewMode>("tree");
   const [searchTerm, setSearchTerm] = useState<string>("");
   const [debouncedSearchTerm, setDebouncedSearchTerm] = useState<string>("");
@@ -390,38 +399,37 @@ const JsonExplorer: React.FC = () => {
       setError(null);
       setExpandedPaths(new Set(['$'])); // Reset expansion on new JSON
       nodeElementRefs.current = new Map(); // Reset refs
-      // Pre-populate refs for the initial structure
-      const initialRefs: { path: string; elementRef: React.RefObject<HTMLDivElement> }[] = [];
-      // Call findMatches with a dummy search term initially to populate refs
-      // Use a non-empty dummy term to ensure it traverses, but maybe one that won't match anything common
-      // Or, modify findMatches to populate refs even with empty search term (better approach)
-      // Let's assume findMatches is modified or we call it later smartly
-       // We'll populate refs during the first real search or expansion instead.
+      setPreviewDisplayMode('json'); // Reset preview mode
     } catch (e: any) {
       setError(`Invalid JSON: ${e.message}`);
       setParsedJson(null);
-      setPreviewResult("");
+      setPreviewResult(undefined);
       setMatchPaths([]);
       setCurrentMatchIndex(-1);
       setExpandedPaths(new Set(['$']));
       nodeElementRefs.current = new Map();
+      setPreviewDisplayMode('json'); // Reset preview mode on error
     }
   }, [jsonInput]);
 
  // Effect for updating preview using the custom path evaluation
  useEffect(() => {
     if (error || parsedJson === null) {
-        setPreviewResult("");
+        setPreviewResult(undefined);
         return;
     }
     try {
         const result = evaluateJsonPath(parsedJson, jsonPath);
-        setPreviewResult(result === undefined ? "undefined" : JSON.stringify(result, null, 2));
+        setPreviewResult(result);
+        // Reset to JSON view if the result is not an array or object suitable for tree view
+        if (previewDisplayMode === 'tree' && !isArray(result)) {
+            setPreviewDisplayMode('json');
+        }
     } catch (e: any) {
-        // Catch errors from evaluateJsonPath specifically if needed
         setPreviewResult(`Error accessing path: ${e.message}`);
+        setPreviewDisplayMode('json'); // Reset on error
     }
-}, [jsonPath, parsedJson, error]);
+}, [jsonPath, parsedJson, error, previewDisplayMode]); // Added previewDisplayMode
 
 
   // Debounce search term
@@ -500,7 +508,7 @@ const JsonExplorer: React.FC = () => {
            // Ensure the target node itself is expanded if it's an object or array
             try {
                 const nodeValue = evaluateJsonPath(parsedJson, targetPath); // Use evaluateJsonPath
-                 if ((isObject(nodeValue) || isArray(nodeValue)) && Object.keys(nodeValue).length > 0) {
+                 if ((isObject(nodeValue) || isArray(nodeValue)) && (Object.keys(nodeValue).length > 0 || isArray(nodeValue) && nodeValue.length > 0)) {
                      newPaths.add(targetPath);
                  }
             } catch (e) {
@@ -590,8 +598,17 @@ const JsonExplorer: React.FC = () => {
 
   const handleContextMenuCopy = useCallback((event: React.MouseEvent<HTMLButtonElement>) => {
      event.preventDefault();
-     copyToClipboard(previewResult, "Preview Result");
-  }, [previewResult, copyToClipboard]); // Add dependencies
+     // Format result for copying based on current display mode
+     let textToCopy: string;
+     if (previewDisplayMode === 'tree' && isArray(previewResult)) {
+         // Simple text join for tree view copy
+         textToCopy = previewResult.map(item => String(item)).join('\n');
+     } else {
+         // Default to JSON stringify
+         textToCopy = previewResult === undefined ? "undefined" : JSON.stringify(previewResult, null, 2);
+     }
+     copyToClipboard(textToCopy, "Preview Result");
+  }, [previewResult, previewDisplayMode, copyToClipboard]); // Add dependencies
 
   const handleNextMatch = useCallback(() => {
     if (matchPaths.length > 0) {
@@ -620,6 +637,14 @@ const JsonExplorer: React.FC = () => {
   const handleCollapseAll = useCallback(() => {
       setExpandedPaths(new Set(['$'])); // Only keep root expanded
   }, []); // No dependencies needed
+
+  const togglePreviewDisplayMode = useCallback(() => {
+      setPreviewDisplayMode(prev => prev === 'json' ? 'tree' : 'json');
+  }, []);
+
+  const handlePreviewItemDoubleClick = useCallback((item: any) => {
+      copyToClipboard(String(item), "Preview Item");
+  }, [copyToClipboard]);
 
   // Memoize the JsonTreeNode to prevent unnecessary re-renders
   const memoizedJsonTree = useMemo(() => {
@@ -832,13 +857,49 @@ const JsonExplorer: React.FC = () => {
                         <p>Right Click: Copy Result</p>
                     </TooltipContent>
                 </Tooltip>
+                 <Tooltip>
+                    <TooltipTrigger asChild>
+                         <Button
+                            variant="outline"
+                            size="icon"
+                            onClick={togglePreviewDisplayMode}
+                            aria-label="Toggle Preview Display Mode"
+                            disabled={error !== null || !isArray(previewResult)} // Disable if not an array
+                         >
+                            {previewDisplayMode === 'json' ? <Rows className="h-4 w-4" /> : <Binary className="h-4 w-4" />}
+                         </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">
+                        {previewDisplayMode === 'json' ? "Show as Tree" : "Show as JSON"}
+                    </TooltipContent>
+                </Tooltip>
             </div>
           </CardHeader>
           <CardContent className="flex-1 overflow-hidden p-0 px-4 pb-4">
             <ScrollArea className="h-full border rounded-md p-2 bg-card">
-              <pre className="text-sm font-mono whitespace-pre-wrap break-words">
-                {error ? <span className="text-destructive">Invalid JSON</span> : (previewResult || <span className="text-muted-foreground">Preview will appear here</span>)}
-              </pre>
+              {error ? (
+                <span className="text-destructive">Invalid JSON</span>
+              ) : previewResult === undefined ? (
+                <span className="text-muted-foreground">Preview will appear here</span>
+              ) : previewDisplayMode === 'tree' && isArray(previewResult) ? (
+                // Render array items as a list for tree-like view
+                 <div className="flex flex-col space-y-1">
+                    {previewResult.map((item, index) => (
+                       <div
+                            key={index}
+                            className="text-sm font-mono p-1 rounded hover:bg-muted/50 cursor-pointer"
+                            onDoubleClick={() => handlePreviewItemDoubleClick(item)}
+                       >
+                           {typeof item === 'string' ? `"${item}"` : String(item)}
+                       </div>
+                    ))}
+                 </div>
+              ) : (
+                // Render as JSON string
+                <pre className="text-sm font-mono whitespace-pre-wrap break-words">
+                  {JSON.stringify(previewResult, null, 2)}
+                </pre>
+              )}
             </ScrollArea>
           </CardContent>
         </Card>
@@ -848,5 +909,3 @@ const JsonExplorer: React.FC = () => {
 };
 
 export default JsonExplorer;
-
-
