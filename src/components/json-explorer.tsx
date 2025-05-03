@@ -1,3 +1,4 @@
+
 "use client";
 
 import * as React from "react";
@@ -6,10 +7,9 @@ import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { Copy, ClipboardCopy, Search, Rows, Pencil } from "lucide-react";
+import { ClipboardCopy, Search, Rows, Pencil } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import JsonTreeNode from "./json-tree-node";
 import { get } from 'lodash-es'; // Using lodash get for safe path access
@@ -53,19 +53,52 @@ const JsonExplorer: React.FC = () => {
   const [internalSearchTerm, setInternalSearchTerm] = useState<string>(""); // For debounced search
   const { toast } = useToast();
 
-  const parseJson = useCallback((input: string) => {
+  // Effect for parsing JSON when input changes
+  useEffect(() => {
     try {
-      const parsed = JSON.parse(input);
+      const parsed = JSON.parse(jsonInput);
       setParsedJson(parsed);
       setError(null);
-      // Update preview if path is already set
-      updatePreview(jsonPath, parsed);
     } catch (e: any) {
       setError(`Invalid JSON: ${e.message}`);
       setParsedJson(null);
-      setPreviewResult(""); // Clear preview on error
+      // Clear preview immediately on parse error
+      setPreviewResult("");
     }
-  }, [jsonPath]); // Added jsonPath dependency
+  }, [jsonInput]); // Only depends on jsonInput
+
+  // Effect for updating preview when path or parsed data changes
+  useEffect(() => {
+    // If there's a parse error, the error message is already shown or preview cleared by the first effect.
+    if (error) {
+        // Optionally, explicitly set preview based on error state if needed, but usually clearing is fine.
+        // setPreviewResult(`Error in JSON input: ${error}`);
+        return;
+    }
+
+    if (parsedJson === null) {
+        // Handles the initial state or cases where parsing results in null without an error.
+        setPreviewResult("");
+        return;
+    }
+
+    try {
+      // Use lodash get for safe access, adjust path for root '$' if needed
+      const adjustedPath = jsonPath === '$' ? '' : jsonPath.startsWith('$.') ? jsonPath.substring(2) : jsonPath;
+      const result = get(parsedJson, adjustedPath);
+
+      if (result === undefined) {
+         setPreviewResult("undefined"); // Indicate that the path is valid but leads to undefined
+      } else {
+         setPreviewResult(JSON.stringify(result, null, 2)); // Pretty print the result
+      }
+    } catch (e: any) {
+       // This catch might be redundant if lodash 'get' handles most path errors gracefully,
+       // but kept for safety against unexpected issues.
+       setPreviewResult(`Error accessing path: ${e.message}`);
+    }
+  }, [jsonPath, parsedJson, error]); // Depends on path, parsed data, and error state
+
 
   // Debounce mechanism for search
   useEffect(() => {
@@ -78,42 +111,15 @@ const JsonExplorer: React.FC = () => {
     };
   }, [searchTerm]);
 
-  // Initial parse and update preview
-  useEffect(() => {
-    parseJson(jsonInput);
-    updatePreview(jsonPath, parsedJson); // Ensure preview updates if jsonPath changes initially
-  }, [jsonInput, jsonPath, parseJson, parsedJson]); // Added parsedJson dependency
 
   const handleInputChange = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
     const newJsonInput = event.target.value;
     setJsonInput(newJsonInput);
-    // No need to parse here, useEffect handles it
   };
 
   const handlePathChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const newPath = event.target.value;
     setJsonPath(newPath);
-    // No need to update preview here, useEffect handles it
-  };
-
-  const updatePreview = (path: string, data: any) => {
-    if (!data) {
-      setPreviewResult("");
-      return;
-    }
-    try {
-      // Use lodash get for safe access, adjust path for root '$' if needed
-      const adjustedPath = path === '$' ? '' : path.startsWith('$.') ? path.substring(2) : path;
-      const result = get(data, adjustedPath);
-
-      if (result === undefined) {
-         setPreviewResult("undefined");
-      } else {
-         setPreviewResult(JSON.stringify(result, null, 2)); // Pretty print the result
-      }
-    } catch (e: any) {
-       setPreviewResult(`Error accessing path: ${e.message}`);
-    }
   };
 
 
@@ -121,7 +127,6 @@ const JsonExplorer: React.FC = () => {
     // Convert lodash-style path (e.g., features[0]) to JSONPath-like (e.g., $.features[0])
     const jsonPathStyle = path.startsWith('$') ? path : `$.${path}`;
     setJsonPath(jsonPathStyle);
-    // updatePreview is called by useEffect due to jsonPath change
   };
 
   const copyToClipboard = (text: string, type: string) => {
