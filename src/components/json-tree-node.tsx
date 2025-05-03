@@ -57,10 +57,13 @@ const JsonTreeNode: React.FC<JsonTreeNodeProps> = ({
 
   const highlightText = (text: string): React.ReactNode => {
       if (!regex || !text) return text;
-      const stringText = String(text);
+      const stringText = String(text); // Ensure text is a string
+      // Check if regex is valid and not empty before splitting
+      if (!regex || !safeSearchTerm) return stringText;
+
       const parts = stringText.split(regex);
       return parts.map((part, index) =>
-          regex.test(part) ? (
+          regex.test(part) ? ( // Test the part itself against the original regex
               <span key={index} className="bg-yellow-300 dark:bg-yellow-600">
                   {part}
               </span>
@@ -75,17 +78,21 @@ const JsonTreeNode: React.FC<JsonTreeNodeProps> = ({
   const valueString = !isObjectType ? JSON.stringify(value) : '';
   const valueDisplay = !isObjectType ? highlightText(valueString) : null;
 
-  const nodeKeyMatches = regex && regex.test(nodeKey.toLowerCase());
+  const nodeKeyMatches = regex && regex.test(String(nodeKey).toLowerCase()); // Ensure nodeKey is string
   const valueMatches = regex && !isObjectType && value !== null && valueString && regex.test(valueString.toLowerCase());
   const isGeneralMatch = nodeKeyMatches || valueMatches;
 
 
   const isCurrentHighlight = path === highlightPath;
 
+  // Determine background color based on highlight and match status
   const getBackgroundColor = () => {
-    if (isCurrentHighlight) return "bg-primary/20";
-    if (isGeneralMatch && !isCurrentHighlight) return "bg-accent/30";
-    return "";
+      if (isCurrentHighlight) {
+          return "bg-primary/20"; // Highlighted match
+      } else if (isGeneralMatch) {
+           return "bg-accent/30"; // Other match (not currently focused)
+      }
+      return ""; // No match or highlight
   };
 
   // Ensure ref exists for child nodes before rendering them
@@ -105,7 +112,7 @@ const JsonTreeNode: React.FC<JsonTreeNodeProps> = ({
             <div
                 className={cn(
                 "flex items-center cursor-pointer hover:bg-muted/50 rounded px-1 py-0.5",
-                 getBackgroundColor()
+                 getBackgroundColor() // Apply background color class
                 )}
                 style={{ paddingLeft: `${level * 1.5}rem` }}
                 onClick={handleNodeClick} // Click on the div triggers path update
@@ -160,7 +167,7 @@ const JsonTreeNode: React.FC<JsonTreeNodeProps> = ({
       {isExpanded && hasChildren && (
         <div className="mt-0.5">
           {Object.entries(value).map(([key, childValue], index) => {
-            const childPath = isArrayType ? `${path}[${key}]` : (path === '$' ? `$.${key}` : `${path}.${key}`);
+            const childPath = isArrayType ? `${path}[${index}]` : (path === '$' ? `$.${key}` : `${path}.${key}`); // Correct index usage for arrays
             const uniqueKey = `${childPath}-${index}`; // Use index for better key stability
             const childRef = getOrCreateRef(childPath); // Get or create ref for child
             return (
@@ -186,3 +193,5 @@ const JsonTreeNode: React.FC<JsonTreeNodeProps> = ({
 };
 
 export default JsonTreeNode;
+
+    
