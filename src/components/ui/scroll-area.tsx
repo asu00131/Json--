@@ -22,7 +22,9 @@ const ScrollArea = React.forwardRef<
   >
     <ScrollAreaPrimitive.Viewport
       ref={viewportRef} // Pass the viewportRef to the Viewport component
-      className="h-full w-full rounded-[inherit]">
+      className="h-full w-full rounded-[inherit]"
+      suppressHydrationWarning // Add suppressHydrationWarning here
+      >
       {children}
     </ScrollAreaPrimitive.Viewport>
     <ScrollBar />
@@ -54,3 +56,4 @@ const ScrollBar = React.forwardRef<
 ScrollBar.displayName = ScrollAreaPrimitive.ScrollAreaScrollbar.displayName
 
 export { ScrollArea, ScrollBar }
+
