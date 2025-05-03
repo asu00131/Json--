@@ -2,7 +2,7 @@
 "use client";
 
 import * as React from "react";
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -57,18 +57,20 @@ function evaluatePathSegments(data: any, segments: string[]): any {
 
     for (let i = 0; i < segments.length; i++) {
         if (currentData === undefined || currentData === null) {
-            return undefined;
+            return undefined; // Cannot traverse further
         }
 
         const segment = segments[i];
+        const isLastSegment = i === segments.length - 1;
 
         if (segment.endsWith('[*]')) {
             const arrayKey = segment.substring(0, segment.length - 3);
-            const targetArray = isObject(currentData) ? currentData[arrayKey] : undefined;
+            // Get the array, handling root array case (arrayKey might be empty)
+            const targetArray = arrayKey ? (isObject(currentData) ? currentData[arrayKey] : undefined) : (isArray(currentData) ? currentData : undefined);
 
             if (!isArray(targetArray)) {
-                 // If it's not an array, but we have more segments, it's an error or undefined
-                 return segments.length -1 > i ? undefined : `Error: Path segment "${arrayKey}" does not resolve to an array at ${segments.slice(0, i + 1).join('.')}`;
+                 // If it's not an array, it's an error or undefined, depending on context
+                 return undefined;
             }
 
             // Remaining segments to apply to each array element
@@ -82,24 +84,28 @@ function evaluatePathSegments(data: any, segments: string[]): any {
             // Apply remaining segments to each element and collect results
             const results = targetArray.map(item => evaluatePathSegments(item, remainingSegments));
 
-             // Filter out undefined results if not all elements match the subsequent path
+             // Filter out undefined results ONLY if the entire result for an item is undefined
+            // If the sub-path resolves to null or an empty object/array, keep it
             const validResults = results.filter(res => res !== undefined);
 
             // If no valid results found after applying sub-path, return undefined
-             // Otherwise, return the array of valid results
+            // Otherwise, return the array of valid results
             return validResults.length > 0 ? validResults : undefined;
 
 
-        } else if (segment.includes('[')) { // Handle specific array index like [0]
-             const match = segment.match(/^(.+)\[(\d+)]$/);
+        } else if (segment.includes('[')) { // Handle specific array index like [0] or key[0]
+             const match = segment.match(/^(.+?)\[(\d+)]$/);
              if (match) {
-                 const arrayKey = match[1];
+                 const key = match[1];
                  const index = parseInt(match[2], 10);
-                 const targetArray = isObject(currentData) ? currentData[arrayKey] : undefined;
-                 if (!isArray(targetArray) || index >= targetArray.length) {
+
+                 // Key access before index
+                 const intermediateData = isObject(currentData) ? currentData[key] : undefined;
+                 if (!isArray(intermediateData) || index >= intermediateData.length) {
                      return undefined; // Array not found or index out of bounds
                  }
-                 currentData = targetArray[index];
+                 currentData = intermediateData[index];
+
              } else if (segment.match(/^\[(\d+)]$/)) { // Handle root array index like [0]
                   const indexMatch = segment.match(/^\[(\d+)]$/);
                    if (indexMatch && isArray(currentData)) {
@@ -138,7 +144,7 @@ const evaluateJsonPath = (data: any, path: string): any => {
      if (adjustedPath.startsWith('$.')) {
         adjustedPath = adjustedPath.substring(2);
     } else if (adjustedPath.startsWith('$[')) {
-         // Keep the brackets for root array access like $[0]
+         // Keep the brackets for root array access like $[0] or $[*]
          adjustedPath = adjustedPath.substring(1);
     } else if (adjustedPath.startsWith('$')) {
          // Should not happen with valid paths, but handle just in case
@@ -146,7 +152,7 @@ const evaluateJsonPath = (data: any, path: string): any => {
      }
 
 
-    // Split path carefully, handling array indices within brackets
+    // Split path carefully, handling array indices and wildcards within brackets
     const segments: string[] = [];
     let currentSegment = '';
     let inBrackets = false;
@@ -156,48 +162,55 @@ const evaluateJsonPath = (data: any, path: string): any => {
         const char = adjustedPath[i];
 
         if (char === '.' && !inBrackets) {
+            // End of an object key segment
             if (currentSegment) segments.push(currentSegment);
             currentSegment = '';
         } else if (char === '[' && !inBrackets) {
+            // Start of bracket notation (index or wildcard)
              if (currentSegment) {
-                 // This segment part before the bracket is the key/property name
+                 // Store the object key segment preceding the bracket
                  segments.push(currentSegment);
-                 currentSegment = ''; // Reset for the bracket part
+                 currentSegment = '';
              }
              inBrackets = true;
              bracketContent = '['; // Start collecting bracket content
         } else if (char === ']' && inBrackets) {
+             // End of bracket notation
              bracketContent += ']';
              inBrackets = false;
-              // Check if the previous segment exists and append bracket content, or push as new segment
-             if (segments.length > 0 && !segments[segments.length - 1].includes('[')) {
-                 // Append bracket to the last property segment if it makes sense
-                 // e.g., 'arrayOfObjects' + '[*]' becomes 'arrayOfObjects[*]'
-                 // Need to be careful not to merge if it's root access like [0]
-                  if (adjustedPath.startsWith(segments[segments.length - 1] + bracketContent)) {
-                     segments[segments.length - 1] += bracketContent;
-                 } else {
-                     segments.push(bracketContent); // Push as separate segment, e.g., for root array $[0]
-                 }
-
-             } else {
-                  segments.push(bracketContent); // Push as separate segment, e.g., for root array $[0]
-             }
-
+             segments.push(bracketContent); // Push the complete bracket segment (e.g., '[0]', '[*]')
              bracketContent = ''; // Reset bracket content
         } else if (inBrackets) {
+            // Inside brackets, collect content
             bracketContent += char;
         } else {
+            // Part of an object key segment
             currentSegment += char;
         }
     }
 
-     // Add the last segment if any
+     // Add the last segment if any (could be object key)
     if (currentSegment) {
         segments.push(currentSegment);
     }
 
-    return evaluatePathSegments(data, segments);
+    // Handle cases like '$.prop[*]' or '$[*]' correctly by adjusting segments
+    const processedSegments: string[] = [];
+    for (let i = 0; i < segments.length; i++) {
+        const current = segments[i];
+        const next = segments[i + 1];
+
+        if (next && next.startsWith('[') && !current.startsWith('[')) {
+            // Combine object key with its following bracket notation
+            processedSegments.push(current + next);
+            i++; // Skip the next segment as it's combined
+        } else {
+            processedSegments.push(current);
+        }
+    }
+
+
+    return evaluatePathSegments(data, processedSegments);
 };
 
 
@@ -213,14 +226,15 @@ const findMatches = (value: any, searchTerm: string, currentPath: string, result
              // Handle root object keys correctly (prepend '$') vs. nested keys/indices
             const isRootObject = currentPath === '$' && !isArray(value);
             const newPath = isArray(value)
-                ? `${currentPath}[${key}]`
-                : (isRootObject ? `$.${key}` : `${currentPath}.${key}`);
+                ? `${currentPath}[${key}]` // Array element path
+                : (isRootObject ? `$.${key}` : `${currentPath}.${key}`); // Object property path
 
             // Ensure ref exists for this path
-            if (!elementRefs.current.has(newPath)) {
-                elementRefs.current.set(newPath, React.createRef<HTMLDivElement>());
+             const refKey = newPath; // Use the generated path as the key
+            if (!elementRefs.current.has(refKey)) {
+                elementRefs.current.set(refKey, React.createRef<HTMLDivElement>());
             }
-            const currentRef = elementRefs.current.get(newPath)!;
+            const currentRef = elementRefs.current.get(refKey)!;
 
 
             // Check if key matches
@@ -232,11 +246,15 @@ const findMatches = (value: any, searchTerm: string, currentPath: string, result
             }
 
             // Check if primitive value matches
-            if (!isObject(childValue) && childValue !== null && regex.test(String(childValue))) {
-                 // Avoid duplicates and only add if path is not already added via key match
-                 if (!results.some(r => r.path === newPath)) {
-                    results.push({ path: newPath, elementRef: currentRef });
-                 }
+             // Only test primitives, null, or empty strings
+            if ((!isObject(childValue) && !isArray(childValue)) || childValue === null) {
+                const stringValue = String(childValue); // Convert null or primitives to string
+                if (regex.test(stringValue)) {
+                    // Avoid duplicates and only add if path is not already added via key match
+                     if (!results.some(r => r.path === newPath)) {
+                         results.push({ path: newPath, elementRef: currentRef });
+                     }
+                }
             }
 
             // Recurse into children
@@ -256,21 +274,21 @@ const findMatches = (value: any, searchTerm: string, currentPath: string, result
 
 // Helper function to get all paths that represent expandable nodes (objects/arrays with content)
 const getAllExpandablePaths = (value: any, currentPath: string = '$', paths: Set<string> = new Set()): Set<string> => {
-    if (isObject(value) && Object.keys(value).length > 0) {
+    const isExpandable = (isObject(value) && Object.keys(value).length > 0) || (isArray(value) && value.length > 0);
+
+    if (isExpandable) {
         paths.add(currentPath); // Add current path if it's an expandable node
-        Object.entries(value).forEach(([key, childValue]) => {
-            const isRootObject = currentPath === '$' && !isArray(value);
-            const newPath = isArray(value)
-                ? `${currentPath}[${key}]`
-                : (isRootObject ? `$.${key}` : `${currentPath}.${key}`);
-            getAllExpandablePaths(childValue, newPath, paths);
-        });
-    } else if (isArray(value) && value.length > 0) {
-        paths.add(currentPath);
-        value.forEach((item, index) => {
-            const newPath = `${currentPath}[${index}]`;
-            getAllExpandablePaths(item, newPath, paths);
-        });
+        if (isObject(value) && !isArray(value)) {
+             Object.entries(value).forEach(([key, childValue]) => {
+                const newPath = currentPath === '$' ? `$.${key}` : `${currentPath}.${key}`;
+                getAllExpandablePaths(childValue, newPath, paths);
+            });
+        } else if (isArray(value)) {
+             value.forEach((item, index) => {
+                const newPath = `${currentPath}[${index}]`;
+                getAllExpandablePaths(item, newPath, paths);
+            });
+        }
     }
     return paths;
 };
@@ -281,42 +299,63 @@ const getAncestorPaths = (targetPath: string): Set<string> => {
     const ancestors = new Set<string>(['$']); // Always include root
     if (!targetPath || targetPath === '$') return ancestors;
 
-    // Split path intelligently considering bracket notation for arrays and dot notation for objects
+     // Reuse the path splitting logic from evaluateJsonPath for consistency
+     let adjustedPath = targetPath;
+     if (adjustedPath.startsWith('$.')) adjustedPath = adjustedPath.substring(2);
+     else if (adjustedPath.startsWith('$[')) adjustedPath = adjustedPath.substring(1);
+     else if (adjustedPath.startsWith('$')) return ancestors; // Invalid start
+
     const segments: string[] = [];
     let currentSegment = '';
     let inBrackets = false;
-    // Start from index 1 to skip the initial '$'
-    for (let i = 1; i < targetPath.length; i++) {
-        const char = targetPath[i];
+
+    for (let i = 0; i < adjustedPath.length; i++) {
+        const char = adjustedPath[i];
         if (char === '.' && !inBrackets) {
             if (currentSegment) segments.push(currentSegment);
             currentSegment = '';
         } else if (char === '[' && !inBrackets) {
             if (currentSegment) segments.push(currentSegment);
-            currentSegment = '[';
             inBrackets = true;
+            currentSegment = '['; // Start bracket content
         } else if (char === ']' && inBrackets) {
             currentSegment += ']';
             segments.push(currentSegment);
-            currentSegment = '';
             inBrackets = false;
+            currentSegment = '';
         } else {
             currentSegment += char;
         }
     }
-    // Add the last segment if any
     if (currentSegment) segments.push(currentSegment);
+
+    // Combine adjacent key/bracket segments correctly
+    const combinedSegments: string[] = [];
+    for (let i = 0; i < segments.length; i++) {
+        const current = segments[i];
+        const next = segments[i + 1];
+         if (next && next.startsWith('[') && !current.startsWith('[')) {
+            combinedSegments.push(current + next);
+            i++;
+        } else {
+            combinedSegments.push(current);
+        }
+    }
 
 
     let currentBuiltPath = '$';
-    // Iterate through segments, building up the path and adding ancestors
-    for (let i = 0; i < segments.length - 1; i++) { // Stop before the last segment
-        const segment = segments[i];
-        if (segment.startsWith('[')) {
-            currentBuiltPath += segment;
-        } else {
-             // Handle root object case correctly ($.key vs .key)
-             currentBuiltPath += (currentBuiltPath === '$' && !segment.startsWith('.') ? '.' : (segment.startsWith('.') ? '' : '.')) + segment;
+    // Iterate through combined segments, building up the path and adding ancestors
+    for (let i = 0; i < combinedSegments.length - 1; i++) { // Stop before the last segment
+        const segment = combinedSegments[i];
+         if (segment.startsWith('[')) {
+            currentBuiltPath += segment; // Append bracket notation directly
+        } else if (segment.includes('[')) {
+             // Handle combined key[index/wildcard]
+             const [keyPart, bracketPart] = segment.split(/(\[.*])/);
+             currentBuiltPath += (currentBuiltPath === '$' ? '.' : '.') + keyPart + bracketPart;
+         } else {
+             // Handle simple object key
+             currentBuiltPath += (currentBuiltPath === '$' ? '.' : '.') + segment;
         }
         ancestors.add(currentBuiltPath);
     }
@@ -353,7 +392,11 @@ const JsonExplorer: React.FC = () => {
       nodeElementRefs.current = new Map(); // Reset refs
       // Pre-populate refs for the initial structure
       const initialRefs: { path: string; elementRef: React.RefObject<HTMLDivElement> }[] = [];
-      findMatches(parsed, '', '$', initialRefs, nodeElementRefs);
+      // Call findMatches with a dummy search term initially to populate refs
+      // Use a non-empty dummy term to ensure it traverses, but maybe one that won't match anything common
+      // Or, modify findMatches to populate refs even with empty search term (better approach)
+      // Let's assume findMatches is modified or we call it later smartly
+       // We'll populate refs during the first real search or expansion instead.
     } catch (e: any) {
       setError(`Invalid JSON: ${e.message}`);
       setParsedJson(null);
@@ -394,15 +437,18 @@ const JsonExplorer: React.FC = () => {
       setCurrentMatchIndex(-1);
       return;
     }
-    // Always re-run findMatches to ensure refs are populated/updated
+
     const results: { path: string; elementRef: React.RefObject<HTMLDivElement> }[] = [];
+    // Call findMatches. Ensure refs are created/updated within it.
     findMatches(parsedJson, debouncedSearchTerm, '$', results, nodeElementRefs);
+
 
     if (!debouncedSearchTerm) {
         setMatchPaths([]);
         setCurrentMatchIndex(-1);
-        return;
+        return; // Exit if search term is empty
     }
+
 
     // Sort results naturally (optional, but good for consistency)
     results.sort((a, b) => a.path.localeCompare(b.path, undefined, { numeric: true, sensitivity: 'base' }));
@@ -413,15 +459,31 @@ const JsonExplorer: React.FC = () => {
 
     if (firstMatchIndex !== -1) {
       const firstMatchPath = results[firstMatchIndex].path;
-      setJsonPath(firstMatchPath); // Update path input
+      setJsonPath(firstMatchPath); // Update path input to the first match
       // Expand all ancestors of the first match
-      setExpandedPaths(prevPaths => new Set([...prevPaths, ...getAncestorPaths(firstMatchPath)]));
+      setExpandedPaths(prevPaths => {
+          const ancestors = getAncestorPaths(firstMatchPath);
+          // Also add the direct path of the match itself IF it's expandable
+           try {
+               const nodeValue = evaluateJsonPath(parsedJson, firstMatchPath);
+               if (isObject(nodeValue) || isArray(nodeValue)) {
+                   ancestors.add(firstMatchPath); // Add self if expandable
+               }
+           } catch (e) { /* Ignore errors here */ }
+          return new Set([...prevPaths, ...ancestors]);
+      });
     } else {
-        // If no results found, maybe reset path or keep current? Keeping current for now.
-        // Optionally provide feedback that no results were found
+        // No results found, clear path or provide feedback
+        // setJsonPath("$"); // Optionally reset path
+         toast({
+             title: "Search",
+             description: "No matches found.",
+             variant: "default",
+             duration: 3000
+         });
     }
 
-  }, [debouncedSearchTerm, parsedJson, error]); // Added error dependency
+  }, [debouncedSearchTerm, parsedJson, error, toast]); // Added toast dependency
 
 
   // Effect to scroll to the current match
@@ -435,15 +497,14 @@ const JsonExplorer: React.FC = () => {
        setExpandedPaths(prevPaths => {
            const ancestors = getAncestorPaths(targetPath);
            const newPaths = new Set([...prevPaths, ...ancestors]);
-           // If the target itself is expandable, make sure it's expanded
-           // Check if the corresponding node value is an object or array before adding
+           // Ensure the target node itself is expanded if it's an object or array
             try {
-                const nodeValue = evaluateJsonPath(parsedJson, targetPath); // Use evaluateJsonPath here too
+                const nodeValue = evaluateJsonPath(parsedJson, targetPath); // Use evaluateJsonPath
                  if ((isObject(nodeValue) || isArray(nodeValue)) && Object.keys(nodeValue).length > 0) {
                      newPaths.add(targetPath);
                  }
             } catch (e) {
-                // Ignore errors during this check, path might be invalid temporarily
+                // Ignore errors during this check
             }
 
            return newPaths;
@@ -483,7 +544,7 @@ const JsonExplorer: React.FC = () => {
   };
 
   // Unified handler for node click and toggle expansion
-  const handleNodeInteraction = (path: string, value: any, isToggle: boolean) => {
+  const handleNodeInteraction = useCallback((path: string, value: any, isToggle: boolean) => {
     if (isToggle) {
         setExpandedPaths(prevPaths => {
             const newPaths = new Set(prevPaths);
@@ -492,7 +553,8 @@ const JsonExplorer: React.FC = () => {
             } else {
                  // Ensure node exists and has children before expanding
                  // Use lodash-es functions directly
-                 if ((isObject(value) || isArray(value)) && Object.keys(value).length > 0) {
+                 const canExpand = (isObject(value) && Object.keys(value).length > 0) || (isArray(value) && value.length > 0);
+                 if (canExpand) {
                     newPaths.add(path);
                  }
             }
@@ -502,10 +564,10 @@ const JsonExplorer: React.FC = () => {
         // Node click (not toggle icon) - update path preview
         setJsonPath(path);
     }
-  };
+  }, []); // No dependencies needed if it only uses state setters and passed args
 
 
-  const copyToClipboard = (text: string, type: string) => {
+  const copyToClipboard = useCallback((text: string, type: string) => {
     navigator.clipboard.writeText(text)
       .then(() => {
         toast({
@@ -520,44 +582,77 @@ const JsonExplorer: React.FC = () => {
           variant: "destructive",
         });
       });
-  };
+  }, [toast]); // Add toast dependency
 
-  const handleCopy = (event: React.MouseEvent<HTMLButtonElement>) => {
+  const handleCopy = useCallback((event: React.MouseEvent<HTMLButtonElement>) => {
      if (event.button === 0) copyToClipboard(jsonPath, "JSON Path");
-  };
+  }, [jsonPath, copyToClipboard]); // Add dependencies
 
-  const handleContextMenuCopy = (event: React.MouseEvent<HTMLButtonElement>) => {
+  const handleContextMenuCopy = useCallback((event: React.MouseEvent<HTMLButtonElement>) => {
      event.preventDefault();
      copyToClipboard(previewResult, "Preview Result");
-  };
+  }, [previewResult, copyToClipboard]); // Add dependencies
 
-  const handleNextMatch = () => {
+  const handleNextMatch = useCallback(() => {
     if (matchPaths.length > 0) {
       const nextIndex = (currentMatchIndex + 1) % matchPaths.length;
       setCurrentMatchIndex(nextIndex);
       setJsonPath(matchPaths[nextIndex].path); // Update path from the match object
       // Expansion and scrolling are handled by the useEffect for currentMatchIndex
     }
-  };
+  }, [matchPaths, currentMatchIndex]); // Add dependencies
 
-  const handlePrevMatch = () => {
+  const handlePrevMatch = useCallback(() => {
     if (matchPaths.length > 0) {
       const prevIndex = (currentMatchIndex - 1 + matchPaths.length) % matchPaths.length;
       setCurrentMatchIndex(prevIndex);
       setJsonPath(matchPaths[prevIndex].path); // Update path from the match object
        // Expansion and scrolling are handled by the useEffect for currentMatchIndex
     }
-  };
+  }, [matchPaths, currentMatchIndex]); // Add dependencies
 
-  const handleExpandAll = () => {
+  const handleExpandAll = useCallback(() => {
       if (parsedJson) {
           setExpandedPaths(getAllExpandablePaths(parsedJson));
       }
-  };
+  }, [parsedJson]); // Add dependency
 
-  const handleCollapseAll = () => {
+  const handleCollapseAll = useCallback(() => {
       setExpandedPaths(new Set(['$'])); // Only keep root expanded
-  };
+  }, []); // No dependencies needed
+
+  // Memoize the JsonTreeNode to prevent unnecessary re-renders
+  const memoizedJsonTree = useMemo(() => {
+      if (parsedJson !== null && error === null) {
+           // Ensure root ref exists
+           if (!nodeElementRefs.current.has('$')) {
+               nodeElementRefs.current.set('$', React.createRef<HTMLDivElement>());
+           }
+           const rootRef = nodeElementRefs.current.get('$')!;
+
+          return (
+              <JsonTreeNode
+                  nodeKey="$"
+                  value={parsedJson}
+                  level={0}
+                  path="$"
+                  onNodeInteraction={handleNodeInteraction}
+                  searchTerm={debouncedSearchTerm}
+                  highlightPath={currentMatchIndex >= 0 ? matchPaths[currentMatchIndex].path : undefined}
+                  expandedPaths={expandedPaths}
+                  elementRef={rootRef} // Pass root ref
+                  nodeElementRefs={nodeElementRefs} // Pass the map
+              />
+          );
+      }
+      return (
+          <div className="text-muted-foreground p-4 text-center">
+              {error ? 'Invalid JSON format. Please correct it in Edit mode.' : 'Enter JSON in Edit mode to view the tree.'}
+          </div>
+      );
+  }, [parsedJson, error, handleNodeInteraction, debouncedSearchTerm, currentMatchIndex, matchPaths, expandedPaths]);
+
+
 
   return (
     <TooltipProvider>
@@ -571,7 +666,7 @@ const JsonExplorer: React.FC = () => {
                      {/* Expand/Collapse Buttons - only in Tree view and no error */}
                     {viewMode === 'tree' && !error && parsedJson !== null && (
                          <>
-                            <Tooltip>
+                             <Tooltip>
                                 <TooltipTrigger asChild>
                                     <Button
                                         variant="ghost"
@@ -695,26 +790,8 @@ const JsonExplorer: React.FC = () => {
             )}
              {viewMode === 'tree' && (
                  <ScrollArea className="flex-1 border rounded-md p-2 bg-card" viewportRef={scrollAreaRef}>
-                    {parsedJson !== null && error === null ? (
-                         <JsonTreeNode
-                            nodeKey="$"
-                            value={parsedJson}
-                            level={0}
-                            path="$"
-                            onNodeInteraction={handleNodeInteraction} // Pass the interaction handler
-                            searchTerm={debouncedSearchTerm}
-                            highlightPath={currentMatchIndex >= 0 ? matchPaths[currentMatchIndex].path : undefined}
-                            expandedPaths={expandedPaths} // Pass the managed expansion state
-                             // Ensure ref exists for root node
-                            elementRef={nodeElementRefs.current.get('$') || (nodeElementRefs.current.set('$', React.createRef<HTMLDivElement>()), nodeElementRefs.current.get('$'))!}
-                            nodeElementRefs={nodeElementRefs} // Pass the refs map
-                        />
-                    ) : (
-                        <div className="text-muted-foreground p-4 text-center">
-                            {error ? 'Invalid JSON format. Please correct it in Edit mode.' : 'Enter JSON in Edit mode to view the tree.'}
-                        </div>
-                    )}
-                </ScrollArea>
+                    {memoizedJsonTree}
+                 </ScrollArea>
              )}
 
              {error && viewMode === 'edit' && (
@@ -771,4 +848,5 @@ const JsonExplorer: React.FC = () => {
 };
 
 export default JsonExplorer;
+
 
