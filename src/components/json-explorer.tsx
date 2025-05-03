@@ -181,6 +181,7 @@ const evaluateJsonPath = (data: any, path: string): any => {
              inBrackets = false;
               // Special handling for '[*]' segment combined with a preceding key
               if (segments.length > 0 && !segments[segments.length - 1].startsWith('[')) {
+                  // Combine key with bracket, e.g., 'key' + '[*]' -> 'key[*]'
                   segments[segments.length - 1] += bracketContent;
               } else {
                   segments.push(bracketContent); // Push standalone bracket segment (e.g., '[0]', '[*]')
@@ -379,7 +380,7 @@ const JsonExplorer: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [jsonPath, setJsonPath] = useState<string>("$"); // Default to root
   const [previewResult, setPreviewResult] = useState<any>(undefined); // Store raw result
-  const [previewDisplayMode, setPreviewDisplayMode] = useState<PreviewDisplayMode>('json');
+  const [previewDisplayMode, setPreviewDisplayMode] = useState<PreviewDisplayMode>('tree'); // Default to 'tree'
   const [viewMode, setViewMode] = useState<ViewMode>("tree");
   const [searchTerm, setSearchTerm] = useState<string>("");
   const [debouncedSearchTerm, setDebouncedSearchTerm] = useState<string>("");
@@ -399,7 +400,8 @@ const JsonExplorer: React.FC = () => {
       setError(null);
       setExpandedPaths(new Set(['$'])); // Reset expansion on new JSON
       nodeElementRefs.current = new Map(); // Reset refs
-      setPreviewDisplayMode('json'); // Reset preview mode
+      // Set initial preview mode based on root type
+      setPreviewDisplayMode(isArray(parsed) ? 'tree' : 'json');
     } catch (e: any) {
       setError(`Invalid JSON: ${e.message}`);
       setParsedJson(null);
@@ -421,15 +423,15 @@ const JsonExplorer: React.FC = () => {
     try {
         const result = evaluateJsonPath(parsedJson, jsonPath);
         setPreviewResult(result);
-        // Reset to JSON view if the result is not an array or object suitable for tree view
-        if (previewDisplayMode === 'tree' && !isArray(result)) {
+        // Automatically switch to JSON view if the result is not an array
+        if (!isArray(result)) {
             setPreviewDisplayMode('json');
         }
     } catch (e: any) {
         setPreviewResult(`Error accessing path: ${e.message}`);
         setPreviewDisplayMode('json'); // Reset on error
     }
-}, [jsonPath, parsedJson, error, previewDisplayMode]); // Added previewDisplayMode
+}, [jsonPath, parsedJson, error]); // Removed previewDisplayMode dependency
 
 
   // Debounce search term
@@ -549,6 +551,22 @@ const JsonExplorer: React.FC = () => {
 
   const handlePathChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     setJsonPath(event.target.value);
+     // Reset preview display mode to tree if the path potentially targets an array
+    if (event.target.value.includes('[*]') || event.target.value.match(/\[\d+]$/)) {
+        setPreviewDisplayMode('tree');
+    } else {
+        // Check the result type after path evaluation (handled in useEffect)
+        try {
+            const result = evaluateJsonPath(parsedJson, event.target.value);
+            if (isArray(result)) {
+                setPreviewDisplayMode('tree');
+            } else {
+                setPreviewDisplayMode('json');
+            }
+        } catch {
+            setPreviewDisplayMode('json'); // Default to JSON on path error
+        }
+    }
   };
 
   // Unified handler for node click and toggle expansion
@@ -571,8 +589,10 @@ const JsonExplorer: React.FC = () => {
     } else {
         // Node click (not toggle icon) - update path preview
         setJsonPath(path);
+        // Set preview mode based on the clicked node's value type
+        setPreviewDisplayMode(isArray(value) ? 'tree' : 'json');
     }
-  }, []); // No dependencies needed if it only uses state setters and passed args
+  }, [parsedJson]); // Added parsedJson to re-evaluate path on node click
 
 
   const copyToClipboard = useCallback((text: string, type: string) => {
@@ -602,7 +622,7 @@ const JsonExplorer: React.FC = () => {
      let textToCopy: string;
      if (previewDisplayMode === 'tree' && isArray(previewResult)) {
          // Simple text join for tree view copy
-         textToCopy = previewResult.map(item => String(item)).join('\n');
+         textToCopy = previewResult.map(item => typeof item === 'object' ? JSON.stringify(item) : String(item)).join('\n');
      } else {
          // Default to JSON stringify
          textToCopy = previewResult === undefined ? "undefined" : JSON.stringify(previewResult, null, 2);
@@ -614,19 +634,35 @@ const JsonExplorer: React.FC = () => {
     if (matchPaths.length > 0) {
       const nextIndex = (currentMatchIndex + 1) % matchPaths.length;
       setCurrentMatchIndex(nextIndex);
-      setJsonPath(matchPaths[nextIndex].path); // Update path from the match object
+      const nextPath = matchPaths[nextIndex].path;
+      setJsonPath(nextPath); // Update path from the match object
+       // Set preview mode based on the matched node's value type
+        try {
+            const result = evaluateJsonPath(parsedJson, nextPath);
+            setPreviewDisplayMode(isArray(result) ? 'tree' : 'json');
+        } catch {
+            setPreviewDisplayMode('json');
+        }
       // Expansion and scrolling are handled by the useEffect for currentMatchIndex
     }
-  }, [matchPaths, currentMatchIndex]); // Add dependencies
+  }, [matchPaths, currentMatchIndex, parsedJson]); // Add dependencies
 
   const handlePrevMatch = useCallback(() => {
     if (matchPaths.length > 0) {
       const prevIndex = (currentMatchIndex - 1 + matchPaths.length) % matchPaths.length;
       setCurrentMatchIndex(prevIndex);
-      setJsonPath(matchPaths[prevIndex].path); // Update path from the match object
+      const prevPath = matchPaths[prevIndex].path;
+      setJsonPath(prevPath); // Update path from the match object
+      // Set preview mode based on the matched node's value type
+        try {
+            const result = evaluateJsonPath(parsedJson, prevPath);
+            setPreviewDisplayMode(isArray(result) ? 'tree' : 'json');
+        } catch {
+            setPreviewDisplayMode('json');
+        }
        // Expansion and scrolling are handled by the useEffect for currentMatchIndex
     }
-  }, [matchPaths, currentMatchIndex]); // Add dependencies
+  }, [matchPaths, currentMatchIndex, parsedJson]); // Add dependencies
 
   const handleExpandAll = useCallback(() => {
       if (parsedJson) {
@@ -643,7 +679,8 @@ const JsonExplorer: React.FC = () => {
   }, []);
 
   const handlePreviewItemDoubleClick = useCallback((item: any) => {
-      copyToClipboard(String(item), "Preview Item");
+      const textToCopy = typeof item === 'object' ? JSON.stringify(item) : String(item);
+      copyToClipboard(textToCopy, "Preview Item");
   }, [copyToClipboard]);
 
   // Memoize the JsonTreeNode to prevent unnecessary re-renders
@@ -866,11 +903,11 @@ const JsonExplorer: React.FC = () => {
                             aria-label="Toggle Preview Display Mode"
                             disabled={error !== null || !isArray(previewResult)} // Disable if not an array
                          >
-                            {previewDisplayMode === 'json' ? <Rows className="h-4 w-4" /> : <Binary className="h-4 w-4" />}
+                            {previewDisplayMode === 'json' ? <Binary className="h-4 w-4" /> : <Rows className="h-4 w-4" />} {/* Swapped icons */}
                          </Button>
                     </TooltipTrigger>
                     <TooltipContent side="bottom">
-                        {previewDisplayMode === 'json' ? "Show as Tree" : "Show as JSON"}
+                        {previewDisplayMode === 'json' ? "Show as JSON" : "Show as Tree"} {/* Adjusted tooltip */}
                     </TooltipContent>
                 </Tooltip>
             </div>
@@ -890,7 +927,7 @@ const JsonExplorer: React.FC = () => {
                             className="text-sm font-mono p-1 rounded hover:bg-muted/50 cursor-pointer"
                             onDoubleClick={() => handlePreviewItemDoubleClick(item)}
                        >
-                           {typeof item === 'string' ? `"${item}"` : String(item)}
+                           {typeof item === 'object' ? JSON.stringify(item) : String(item)}
                        </div>
                     ))}
                  </div>
