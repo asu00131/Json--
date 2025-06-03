@@ -28,8 +28,8 @@ const ScrollArea = React.forwardRef<
       >
       {children}
     </ScrollAreaPrimitive.Viewport>
-    <ScrollBar />
-    <ScrollAreaPrimitive.Corner />
+    <ScrollBar suppressHydrationWarning />
+    <ScrollAreaPrimitive.Corner suppressHydrationWarning /> {/* Added suppressHydrationWarning here */}
   </ScrollAreaPrimitive.Root>
 ))
 ScrollArea.displayName = ScrollAreaPrimitive.Root.displayName
@@ -58,3 +58,4 @@ const ScrollBar = React.forwardRef<
 ScrollBar.displayName = ScrollAreaPrimitive.ScrollAreaScrollbar.displayName
 
 export { ScrollArea, ScrollBar }
+
