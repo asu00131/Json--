@@ -165,7 +165,14 @@ const evaluateJsonPath = (data: any, path: string): any => {
             if (foundValues.length === 0) return undefined;
             // If multiple distinct values are found, JSONPath would return an array.
             // If a single value is found, often it's returned directly.
-            return foundValues.length === 1 ? foundValues[0] : foundValues;
+            // Ensure single-item arrays from recursive descent are not flattened unless it's the only distinct value.
+            // This behavior is closer to some JSONPath implementations.
+            // However, for $..theme where theme is unique, returning the value directly is common.
+            // If multiple objects had "theme":"light" and "theme":"dark", it would be ["light", "dark"].
+            // If one object had "theme":["light", "dark"], it would be [["light", "dark"]].
+            // The current logic might need adjustment based on desired specificity for $.. on arrays vs single values.
+            // For now, matching existing simple $.. behavior:
+            return foundValues.length === 1 && !isArray(foundValues[0]) ? foundValues[0] : foundValues;
         }
     }
     // Handle simple $..keyName case END
@@ -433,6 +440,7 @@ const JsonExplorer: React.FC = () => {
 
   // Effect for parsing JSON
   useEffect(() => {
+    if (!isClient) return;
     try {
       const parsed = JSON.parse(jsonInput);
       setParsedJson(parsed);
@@ -451,11 +459,11 @@ const JsonExplorer: React.FC = () => {
       nodeElementRefs.current = new Map();
       setPreviewDisplayMode('json'); // Reset preview mode on error
     }
-  }, [jsonInput]);
+  }, [jsonInput, isClient]);
 
  // Effect for updating preview using the custom path evaluation
  useEffect(() => {
-    if (error || parsedJson === null) {
+    if (!isClient || error || parsedJson === null) {
         setPreviewResult(undefined);
         return;
     }
@@ -472,19 +480,20 @@ const JsonExplorer: React.FC = () => {
         setPreviewResult(`Error accessing path: ${e.message}`);
         setPreviewDisplayMode('json'); // Reset on error
     }
-}, [jsonPath, parsedJson, error]);
+}, [jsonPath, parsedJson, error, isClient]);
 
 
   // Debounce search term
   useEffect(() => {
+    if (!isClient) return;
     const handler = setTimeout(() => setDebouncedSearchTerm(searchTerm), 300);
     return () => clearTimeout(handler);
-  }, [searchTerm]);
+  }, [searchTerm, isClient]);
 
 
    // Scroll to the current match element
-    const scrollToMatch = useCallback((matchIndex: number) => {
-        if (matchIndex < 0 || matchIndex >= matchPaths.length || viewMode !== 'tree') {
+    const scrollToMatch = useCallback((matchIndex: number, pathsToUse: { path: string }[]) => {
+        if (matchIndex < 0 || matchIndex >= pathsToUse.length || viewMode !== 'tree') {
             return;
         }
 
@@ -492,7 +501,7 @@ const JsonExplorer: React.FC = () => {
             clearTimeout(isScrollingRef.current);
         }
 
-        const currentMatchPath = matchPaths[matchIndex]?.path;
+        const currentMatchPath = pathsToUse[matchIndex]?.path;
         if (!currentMatchPath) return;
 
         setExpandedPaths(prevPaths => {
@@ -500,8 +509,6 @@ const JsonExplorer: React.FC = () => {
             const newPaths = new Set(prevPaths);
             ancestors.forEach(path => newPaths.add(path));
             
-            // Defer scroll until after state update and re-render
-            // Using requestAnimationFrame ensures the DOM has updated with new expanded paths
             requestAnimationFrame(() => {
                 const targetElementRef = nodeElementRefs.current.get(currentMatchPath);
                 const element = targetElementRef?.current;
@@ -509,14 +516,13 @@ const JsonExplorer: React.FC = () => {
                     element.scrollIntoView({ behavior: 'smooth', block: 'center' });
                     isScrollingRef.current = window.setTimeout(() => { isScrollingRef.current = null; }, 400);
                 } else {
-                     // Element not found or not in scroll area, try again after refs might update
                     requestAnimationFrame(() => {
                         const elementAgain = nodeElementRefs.current.get(currentMatchPath)?.current;
                         if (elementAgain && scrollAreaRef.current?.contains(elementAgain)) {
                              elementAgain.scrollIntoView({ behavior: 'smooth', block: 'center' });
                              isScrollingRef.current = window.setTimeout(() => { isScrollingRef.current = null; }, 400);
                         } else {
-                           isScrollingRef.current = window.setTimeout(() => { isScrollingRef.current = null; }, 50); // Fallback reset
+                           isScrollingRef.current = window.setTimeout(() => { isScrollingRef.current = null; }, 50); 
                         }
                     });
                 }
@@ -524,18 +530,21 @@ const JsonExplorer: React.FC = () => {
             return newPaths;
         });
 
-    }, [matchPaths, viewMode]);
+    }, [viewMode, nodeElementRefs]);
 
 
     // Effect for performing search and setting initial state
     useEffect(() => {
-        if (parsedJson === null || error) {
+        if (!isClient || parsedJson === null || error) {
             setMatchPaths([]);
             setCurrentMatchIndex(-1);
             return;
         }
 
         const results: { path: string }[] = [];
+        if (!nodeElementRefs.current) {
+            nodeElementRefs.current = new Map();
+        }
         findMatches(parsedJson, debouncedSearchTerm, '$', results, nodeElementRefs);
 
 
@@ -546,7 +555,7 @@ const JsonExplorer: React.FC = () => {
         }
 
         results.sort((a, b) => a.path.localeCompare(b.path, undefined, { numeric: true, sensitivity: 'base' }));
-
+        
         setMatchPaths(results);
         const firstMatchIndex = results.length > 0 ? 0 : -1;
         setCurrentMatchIndex(firstMatchIndex);
@@ -554,11 +563,16 @@ const JsonExplorer: React.FC = () => {
 
         if (firstMatchIndex !== -1 && results[firstMatchIndex]) {
             const firstMatchPath = results[firstMatchIndex].path;
-            setJsonPath(firstMatchPath); 
-            scrollToMatch(firstMatchIndex);
+            if (jsonPath !== firstMatchPath) {
+                 setJsonPath(firstMatchPath); 
+            }
+            
+            if (!isScrollingRef.current) {
+                 scrollToMatch(firstMatchIndex, results);
+            }
 
         } else {
-            if (searchTerm) { 
+            if (searchTerm && debouncedSearchTerm === searchTerm) { 
                 toast({
                     title: "Search",
                     description: "No matches found.",
@@ -567,7 +581,7 @@ const JsonExplorer: React.FC = () => {
                 });
             }
         }
-    }, [debouncedSearchTerm, parsedJson, error, toast, searchTerm, scrollToMatch]); 
+    }, [isClient, debouncedSearchTerm, parsedJson, error, toast, searchTerm, scrollToMatch, jsonPath]); 
 
 
   const handleInputChange = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -678,7 +692,10 @@ const JsonExplorer: React.FC = () => {
       if (!nextPath) return;
 
       setCurrentMatchIndex(nextIndex);
-      setJsonPath(nextPath); 
+      if (jsonPath !== nextPath) {
+        setJsonPath(nextPath); 
+      }
+      
 
        try {
            if(parsedJson) {
@@ -694,8 +711,8 @@ const JsonExplorer: React.FC = () => {
        } catch {
            setPreviewDisplayMode('json');
        }
-       scrollToMatch(nextIndex);
-  }, [matchPaths, currentMatchIndex, scrollToMatch, parsedJson]);
+       scrollToMatch(nextIndex, matchPaths);
+  }, [matchPaths, currentMatchIndex, scrollToMatch, parsedJson, jsonPath]);
 
 
   const handleNextMatch = useCallback(() => navigateMatches('next'), [navigateMatches]);
@@ -704,11 +721,18 @@ const JsonExplorer: React.FC = () => {
    const handleSearchKeyDown = useCallback((event: React.KeyboardEvent<HTMLInputElement>) => {
        if (event.key === 'Enter') {
            event.preventDefault(); 
-           if (debouncedSearchTerm) { 
+           if (debouncedSearchTerm && matchPaths.length > 0) { 
                 navigateMatches('next');
+           } else if (debouncedSearchTerm && matchPaths.length === 0) {
+                toast({
+                    title: "Search",
+                    description: "No matches found.",
+                    variant: "default",
+                    duration: 3000
+                });
            }
        }
-   }, [debouncedSearchTerm, navigateMatches]);
+   }, [debouncedSearchTerm, navigateMatches, matchPaths, toast]);
 
 
   const handleExpandAll = useCallback(() => {
@@ -721,6 +745,7 @@ const JsonExplorer: React.FC = () => {
   const handleCollapseAll = useCallback(() => {
       const initialPaths = new Set(['$']);
       if (parsedJson && ((isArray(parsedJson) && parsedJson.length > 0) || (isObject(parsedJson) && Object.keys(parsedJson).length > 0))) {
+        // No specific action needed here other than setting expandedPaths
       }
       setExpandedPaths(initialPaths);
       if (scrollAreaRef.current) {
@@ -769,8 +794,6 @@ const JsonExplorer: React.FC = () => {
    }, [handleNodeInteraction, debouncedSearchTerm, currentMatchIndex, matchPaths, expandedPaths]);
 
   if (!isClient) {
-    // Render a placeholder or null on the server and during initial client hydration
-    // You can customize this placeholder (e.g., a loading spinner)
     return (
         <div className="flex flex-col md:flex-row h-screen p-4 gap-4 bg-background items-center justify-center">
             <p>Loading JSON Explorer...</p>
@@ -826,7 +849,7 @@ const JsonExplorer: React.FC = () => {
                                 size="icon"
                                 className="h-8 w-8"
                                 onClick={() => setViewMode('tree')}
-                                disabled={error !== null}
+                                disabled={error !== null || parsedJson === null}
                                 aria-label="Switch to Tree View"
                             >
                                 <Rows suppressHydrationWarning className="h-4 w-4" />
@@ -997,7 +1020,7 @@ const JsonExplorer: React.FC = () => {
                             ? (typeof item === 'object' ? JSON.stringify(item) : String(item))
                             : `${item[0]}: ${typeof item[1] === 'object' ? JSON.stringify(item[1]) : String(item[1])}`;
 
-                       const reactKey = `${jsonPath}-${displayKey}-${index}`;
+                       const reactKey = `${jsonPath}-${displayKey}-${index}-${Date.now()}`; // Add timestamp for more unique key
 
                        return (
                            <div
