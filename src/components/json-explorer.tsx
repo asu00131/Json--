@@ -140,6 +140,36 @@ const evaluateJsonPath = (data: any, path: string): any => {
         return data;
     }
 
+    // Handle simple $..keyName case START
+    if (path.startsWith('$..')) {
+        const keyToFind = path.substring(3);
+        // Check if keyToFind is a simple identifier (no dots, no brackets, not empty)
+        if (keyToFind && /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(keyToFind)) {
+            const foundValues: any[] = [];
+            // Inner recursive function to find values
+            function findValuesRecursively(currentValue: any) {
+                if (isArray(currentValue)) {
+                    currentValue.forEach(item => findValuesRecursively(item));
+                } else if (isObject(currentValue)) { // isObject checks for null and not array
+                    if (keyToFind in currentValue) {
+                        foundValues.push(currentValue[keyToFind]);
+                    }
+                    // Important: Recurse on values even if key is found at current level,
+                    // as `..` means any descendant.
+                    Object.values(currentValue).forEach(val => findValuesRecursively(val));
+                }
+            }
+
+            findValuesRecursively(data); // Start search from the root data
+
+            if (foundValues.length === 0) return undefined;
+            // If multiple distinct values are found, JSONPath would return an array.
+            // If a single value is found, often it's returned directly.
+            return foundValues.length === 1 ? foundValues[0] : foundValues;
+        }
+    }
+    // Handle simple $..keyName case END
+
     let adjustedPath = path;
      // Normalize path: remove leading '$.' or '$['
      if (adjustedPath.startsWith('$.')) {
@@ -271,11 +301,11 @@ const findMatches = (value: any, searchTerm: string, currentPath: string, result
 
 // Helper function to get all paths that represent expandable nodes (objects/arrays with content)
 const getAllExpandablePaths = (value: any, currentPath: string = '$', paths: Set<string> = new Set()): Set<string> => {
-    const isExpandable = (isObject(value) && Object.keys(value).length > 0) || (isArray(value) && value.length > 0);
+    const isExpandableNode = (isObject(value) && Object.keys(value).length > 0) || (isArray(value) && value.length > 0);
 
-    if (isExpandable) {
+    if (isExpandableNode) {
         paths.add(currentPath); // Add current path if it's an expandable node
-        if (isObject(value) && !isArray(value)) {
+        if (isObject(value) && !isArray(value)) { // Check it's an object, not an array
              Object.entries(value).forEach(([key, childValue]) => {
                 const newPath = currentPath === '$' ? `$.${key}` : `${currentPath}.${key}`;
                 getAllExpandablePaths(childValue, newPath, paths);
@@ -393,7 +423,7 @@ const JsonExplorer: React.FC = () => {
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const nodeElementRefs = useRef<Map<string, React.RefObject<HTMLDivElement>>>(new Map());
   const searchInputRef = useRef<HTMLInputElement>(null); // Ref for the search input
-  const isScrollingRef = useRef<boolean>(false); // Flag to track scrolling state
+  const isScrollingRef = useRef<number | null>(null); // Track scroll timeout ID
 
 
   // Effect for parsing JSON
@@ -407,7 +437,8 @@ const JsonExplorer: React.FC = () => {
       // Set initial preview mode based on root type
       setPreviewDisplayMode(isArray(parsed) || isObject(parsed) ? 'tree' : 'json'); // Default to tree if object/array
        // Re-run search if needed after JSON updates
-       setDebouncedSearchTerm(searchTerm);
+       // No, this will cause issues. Search should run based on debouncedSearchTerm effect.
+       // setDebouncedSearchTerm(searchTerm); // Re-evaluating this line
     } catch (e: any) {
       setError(`Invalid JSON: ${e.message}`);
       setParsedJson(null);
@@ -418,7 +449,7 @@ const JsonExplorer: React.FC = () => {
       nodeElementRefs.current = new Map();
       setPreviewDisplayMode('json'); // Reset preview mode on error
     }
-  }, [jsonInput, searchTerm]); // Keep searchTerm dependency here
+  }, [jsonInput]); // Removed searchTerm, search is handled by debouncedSearchTerm effect
 
  // Effect for updating preview using the custom path evaluation
  useEffect(() => {
@@ -435,7 +466,7 @@ const JsonExplorer: React.FC = () => {
             setPreviewDisplayMode('json');
         } else {
              // Keep existing mode or default to 'tree' if object/array
-             setPreviewDisplayMode(prev => (isArray(result) || isObject(result)) ? prev : 'json');
+             setPreviewDisplayMode(prev => (isArray(result) || isObject(result)) ? prev : 'tree');
         }
 
     } catch (e: any) {
@@ -454,18 +485,20 @@ const JsonExplorer: React.FC = () => {
 
    // Scroll to the current match element
     const scrollToMatch = useCallback((matchIndex: number) => {
-        if (matchIndex < 0 || matchIndex >= matchPaths.length || viewMode !== 'tree' || isScrollingRef.current) {
+        if (matchIndex < 0 || matchIndex >= matchPaths.length || viewMode !== 'tree') {
             return;
+        }
+
+        if (isScrollingRef.current) {
+            clearTimeout(isScrollingRef.current); // Clear any existing scroll timeout
         }
 
         const currentMatchPath = matchPaths[matchIndex]?.path;
         if (!currentMatchPath) return;
 
-        isScrollingRef.current = true; // Set scrolling flag
-
-        // Ensure ancestors are expanded
-        const ancestors = getAncestorPaths(currentMatchPath);
+        // Expand ancestors and then scroll
         setExpandedPaths(prevPaths => {
+            const ancestors = getAncestorPaths(currentMatchPath);
             const newPaths = new Set(prevPaths);
             let changed = false;
             ancestors.forEach(path => {
@@ -474,28 +507,44 @@ const JsonExplorer: React.FC = () => {
                     changed = true;
                 }
             });
-            return changed ? newPaths : prevPaths;
-        });
 
-        // Use requestAnimationFrame to wait for the next frame after state updates
-        requestAnimationFrame(() => {
-            const targetElementRef = nodeElementRefs.current.get(currentMatchPath);
-            const element = targetElementRef?.current;
-
-            if (element && scrollAreaRef.current?.contains(element)) {
-                 element.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                 // Use setTimeout to reset the flag after the scroll animation likely completes
-                 setTimeout(() => { isScrollingRef.current = false; }, 400); // Adjust delay based on animation duration
+            // Defer scroll until after state update and re-render
+            if (changed) {
+                 // If paths changed, scroll in the next tick after re-render
+                requestAnimationFrame(() => {
+                    requestAnimationFrame(() => { // Double RAF for good measure
+                        const targetElementRef = nodeElementRefs.current.get(currentMatchPath);
+                        const element = targetElementRef?.current;
+                        if (element && scrollAreaRef.current?.contains(element)) {
+                            element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                            isScrollingRef.current = setTimeout(() => { isScrollingRef.current = null; }, 400);
+                        } else {
+                             isScrollingRef.current = setTimeout(() => { isScrollingRef.current = null; }, 50); // Reset if element not found quickly
+                        }
+                    });
+                });
             } else {
-                 // If element not found initially, wait a bit longer for potential re-renders due to expansion
-                 setTimeout(() => {
-                     const elementAgain = nodeElementRefs.current.get(currentMatchPath)?.current;
-                     if (elementAgain && scrollAreaRef.current?.contains(elementAgain)) {
-                         elementAgain.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                     }
-                     setTimeout(() => { isScrollingRef.current = false; }, 400); // Reset flag after fallback too
-                 }, 150); // Wait a bit longer for potential expansion rendering
+                // Paths didn't change, scroll immediately
+                const targetElementRef = nodeElementRefs.current.get(currentMatchPath);
+                const element = targetElementRef?.current;
+
+                if (element && scrollAreaRef.current?.contains(element)) {
+                    element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    isScrollingRef.current = setTimeout(() => { isScrollingRef.current = null; }, 400);
+                } else {
+                     // Element not found, try after a small delay (e.g. if refs are still updating)
+                     requestAnimationFrame(() => {
+                         const elementAgain = nodeElementRefs.current.get(currentMatchPath)?.current;
+                         if (elementAgain && scrollAreaRef.current?.contains(elementAgain)) {
+                             elementAgain.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                             isScrollingRef.current = setTimeout(() => { isScrollingRef.current = null; }, 400);
+                         } else {
+                            isScrollingRef.current = setTimeout(() => { isScrollingRef.current = null; }, 50);
+                         }
+                     });
+                }
             }
+            return changed ? newPaths : prevPaths; // Return new or old paths
         });
 
     }, [matchPaths, viewMode]);
@@ -509,16 +558,29 @@ const JsonExplorer: React.FC = () => {
             return;
         }
 
+        // nodeElementRefs.current should be populated by JsonTreeNode rendering.
+        // Clearing it here might be problematic if children haven't unmounted.
+        // It's generally better to let JsonTreeNode manage its own ref registration.
+        // However, for a full data replacement, it needs to be reset.
+        // The initial parse effect already clears it which is fine.
+
         const results: { path: string }[] = [];
-        // Ensure refs map is clear before populating
-        nodeElementRefs.current = new Map();
+        // For a new search, we need to ensure refs are fresh.
+        // This is tricky. Let's assume JsonTreeNode will create them.
+        // If findMatches populates refs, it should be done with care.
+        // findMatches *does* populate refs, so it's okay.
         findMatches(parsedJson, debouncedSearchTerm, '$', results, nodeElementRefs);
+
 
         if (!debouncedSearchTerm) {
             setMatchPaths([]);
             setCurrentMatchIndex(-1);
+            if (jsonPath !== '$' && searchTerm === '') { // Reset path if search is cleared and path wasn't root
+                 // setJsonPath('$'); // Optional: reset path when search is cleared
+            }
             return; // Exit if search term is empty
         }
+
 
         // Sort results naturally
         results.sort((a, b) => a.path.localeCompare(b.path, undefined, { numeric: true, sensitivity: 'base' }));
@@ -527,13 +589,11 @@ const JsonExplorer: React.FC = () => {
         const firstMatchIndex = results.length > 0 ? 0 : -1;
         setCurrentMatchIndex(firstMatchIndex);
 
-        if (firstMatchIndex !== -1) {
+
+        if (firstMatchIndex !== -1 && results[firstMatchIndex]) {
             const firstMatchPath = results[firstMatchIndex].path;
             setJsonPath(firstMatchPath); // Update path input to the first match
-            // Use requestAnimationFrame to schedule scroll after render
-            requestAnimationFrame(() => {
-                scrollToMatch(firstMatchIndex);
-            });
+            scrollToMatch(firstMatchIndex);
 
         } else {
             // No results found
@@ -545,19 +605,19 @@ const JsonExplorer: React.FC = () => {
                     duration: 3000
                 });
             }
+             // Do not reset jsonPath here, user might want to keep their manually entered path.
         }
-    // IMPORTANT: Remove scrollToMatch from dependencies here to avoid loop
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [debouncedSearchTerm, parsedJson, error, toast, searchTerm]);
+    }, [debouncedSearchTerm, parsedJson, error, toast, searchTerm, scrollToMatch]); // Added scrollToMatch
 
 
   const handleInputChange = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
     setJsonInput(event.target.value);
     // Reset search state when JSON input changes significantly
     setSearchTerm("");
-    setDebouncedSearchTerm("");
+    // debouncedSearchTerm will update via its own effect
     setMatchPaths([]);
     setCurrentMatchIndex(-1);
+    setJsonPath("$"); // Reset path to root
   };
 
   const handlePathChange = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -565,13 +625,17 @@ const JsonExplorer: React.FC = () => {
     setJsonPath(newPath);
      // Re-evaluate preview mode based on the potential result type
     try {
-        const result = evaluateJsonPath(parsedJson, newPath);
-         if (isArray(result) || isObject(result)) {
-             // Keep existing mode if target is object/array
-             setPreviewDisplayMode(prev => prev);
-         } else {
-             setPreviewDisplayMode('json');
-         }
+        if (parsedJson) { // Ensure parsedJson is available
+            const result = evaluateJsonPath(parsedJson, newPath);
+            if (isArray(result) || isObject(result)) {
+                // Keep existing mode if target is object/array, or switch to tree if it was json
+                setPreviewDisplayMode(prev => prev === 'json' && (isArray(result) || isObject(result)) ? 'tree' : prev);
+            } else {
+                setPreviewDisplayMode('json');
+            }
+        } else {
+             setPreviewDisplayMode('json'); // Default on no data
+        }
     } catch {
         setPreviewDisplayMode('json'); // Default to JSON on path error
     }
@@ -640,7 +704,7 @@ const JsonExplorer: React.FC = () => {
              if (isArray(previewResult)) {
                  textToCopy = previewResult.map(item => typeof item === 'object' ? JSON.stringify(item) : String(item)).join('\n');
              } else { // Object
-                 textToCopy = Object.entries(previewResult).map(([key, value]) => `${key}: ${JSON.stringify(value)}`).join('\n');
+                 textToCopy = Object.entries(previewResult).map(([key, value]) => `${key}: ${typeof value === 'object' ? JSON.stringify(value) : String(value)}`).join('\n');
              }
          } else {
              // If JSON mode, copy the formatted JSON string
@@ -654,7 +718,7 @@ const JsonExplorer: React.FC = () => {
 
   // Function to navigate matches
   const navigateMatches = useCallback((direction: 'next' | 'prev') => {
-      if (matchPaths.length <= 0 || isScrollingRef.current) return; // Prevent navigation while scrolling
+      if (matchPaths.length <= 0 || isScrollingRef.current) return; // Prevent navigation while scrolling animation might be active
 
       let nextIndex;
       if (direction === 'next') {
@@ -669,23 +733,23 @@ const JsonExplorer: React.FC = () => {
       setCurrentMatchIndex(nextIndex);
       setJsonPath(nextPath); // Update path input
 
-      // Update preview mode based on the new path's result type
+       // Update preview mode based on the new path's result type
        try {
-           const result = evaluateJsonPath(parsedJson, nextPath);
-            if (isArray(result) || isObject(result)) {
-                 // Keep existing preview mode if result is object/array
-                 setPreviewDisplayMode(prev => prev);
-            } else {
-                 setPreviewDisplayMode('json');
-            }
+           if(parsedJson) {
+            const result = evaluateJsonPath(parsedJson, nextPath);
+                if (isArray(result) || isObject(result)) {
+                    // If result is object/array, keep tree mode or switch to it if it was json
+                    setPreviewDisplayMode(prev => prev === 'json' && (isArray(result) || isObject(result)) ? 'tree' : prev);
+                } else {
+                    setPreviewDisplayMode('json');
+                }
+           } else {
+                setPreviewDisplayMode('json');
+           }
        } catch {
            setPreviewDisplayMode('json');
        }
-
-       // Use requestAnimationFrame to schedule scroll after state updates
-        requestAnimationFrame(() => {
-            scrollToMatch(nextIndex);
-        });
+       scrollToMatch(nextIndex);
   }, [matchPaths, currentMatchIndex, scrollToMatch, parsedJson]);
 
 
@@ -705,21 +769,32 @@ const JsonExplorer: React.FC = () => {
 
   const handleExpandAll = useCallback(() => {
       if (parsedJson) {
-          setExpandedPaths(getAllExpandablePaths(parsedJson));
+          const allPaths = getAllExpandablePaths(parsedJson);
+          setExpandedPaths(allPaths);
       }
   }, [parsedJson]);
 
   const handleCollapseAll = useCallback(() => {
       // Keep only the root '$' expanded
       const initialPaths = new Set(['$']);
+       // If root is an array/object with no children, it shouldn't be in expandedPaths unless it's '$'
+      if (parsedJson && ((isArray(parsedJson) && parsedJson.length > 0) || (isObject(parsedJson) && Object.keys(parsedJson).length > 0))) {
+        // Only add '$' if it's actually expandable.
+        // getAllExpandablePaths already handles this logic.
+      }
       setExpandedPaths(initialPaths);
       // Scroll back to the top
-      scrollAreaRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
-  }, []);
+      if (scrollAreaRef.current) {
+        scrollAreaRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+      }
+  }, [parsedJson]);
 
   const togglePreviewDisplayMode = useCallback(() => {
-      setPreviewDisplayMode(prev => prev === 'json' ? 'tree' : 'json');
-  }, []);
+       // Only toggle if the current preview result is an object or array
+      if (isArray(previewResult) || isObject(previewResult)) {
+        setPreviewDisplayMode(prev => prev === 'json' ? 'tree' : 'json');
+      }
+  }, [previewResult]);
 
   const handlePreviewItemDoubleClick = useCallback((item: any) => {
       const textToCopy = typeof item === 'object' ? JSON.stringify(item, null, 2) : String(item);
@@ -728,19 +803,7 @@ const JsonExplorer: React.FC = () => {
 
 
   // Memoize the JsonTreeNode component based on its relevant props
-  const MemoizedJsonTreeNode = React.memo(JsonTreeNode, (prevProps, nextProps) => {
-    // Only re-render if specific props change that affect the node's display
-    return (
-      prevProps.nodeKey === nextProps.nodeKey &&
-      prevProps.value === nextProps.value && // Shallow compare value might be enough if immutable
-      prevProps.level === nextProps.level &&
-      prevProps.path === nextProps.path &&
-      prevProps.searchTerm === nextProps.searchTerm &&
-      prevProps.highlightPath === nextProps.highlightPath &&
-      prevProps.expandedPaths === nextProps.expandedPaths && // Reference equality check for the Set
-      prevProps.onNodeInteraction === nextProps.onNodeInteraction // Check if function reference changes
-    );
-  });
+  const MemoizedJsonTreeNode = React.memo(JsonTreeNode);
 
 
    // Function to recursively render the tree using the memoized component
@@ -749,10 +812,16 @@ const JsonExplorer: React.FC = () => {
        if (currentPath === '$' && !nodeElementRefs.current.has('$')) {
            nodeElementRefs.current.set('$', React.createRef<HTMLDivElement>());
        }
-       const currentRef = nodeElementRefs.current.get(currentPath) ?? React.createRef<HTMLDivElement>();
-        if (!nodeElementRefs.current.has(currentPath)) {
-             nodeElementRefs.current.set(currentPath, currentRef); // Ensure ref is in the map
-        }
+       // Get or create ref. This needs to be stable or memoized.
+       // Creating refs inside render can cause issues.
+       // JsonTreeNode itself should manage getting/setting its ref from the map.
+       const getElementRef = (path: string) => {
+           if (!nodeElementRefs.current.has(path)) {
+               nodeElementRefs.current.set(path, React.createRef<HTMLDivElement>());
+           }
+           return nodeElementRefs.current.get(path)!;
+       };
+
 
        return (
            <MemoizedJsonTreeNode
@@ -762,13 +831,11 @@ const JsonExplorer: React.FC = () => {
                path={currentPath}
                onNodeInteraction={handleNodeInteraction}
                searchTerm={debouncedSearchTerm}
-               highlightPath={currentMatchIndex >= 0 ? matchPaths[currentMatchIndex]?.path : undefined}
+               highlightPath={currentMatchIndex >= 0 && matchPaths[currentMatchIndex] ? matchPaths[currentMatchIndex].path : undefined}
                expandedPaths={expandedPaths}
-               elementRef={currentRef} // Pass the specific ref
-               nodeElementRefs={nodeElementRefs} // Pass the map
+               getElementRef={getElementRef} // Pass function to get ref
            />
        );
-   // eslint-disable-next-line react-hooks/exhaustive-deps
    }, [handleNodeInteraction, debouncedSearchTerm, currentMatchIndex, matchPaths, expandedPaths]);
 
 
@@ -846,7 +913,7 @@ const JsonExplorer: React.FC = () => {
                     </Tooltip>
                 </div>
             </div>
-             {viewMode === 'tree' && !error && (
+             {viewMode === 'tree' && !error && parsedJson !== null && (
                 <div className="flex items-center space-x-2">
                     <Search suppressHydrationWarning className="h-4 w-4 text-muted-foreground" />
                     <Input
@@ -871,7 +938,7 @@ const JsonExplorer: React.FC = () => {
                                 size="icon"
                                 className="h-8 w-8"
                                 onClick={handlePrevMatch}
-                                disabled={matchPaths.length <= 1}
+                                disabled={matchPaths.length <= 1 || !!isScrollingRef.current}
                                 aria-label="Previous match"
                             >
                                <ChevronLeft suppressHydrationWarning className="h-4 w-4" />
@@ -886,7 +953,7 @@ const JsonExplorer: React.FC = () => {
                                 size="icon"
                                 className="h-8 w-8"
                                 onClick={handleNextMatch}
-                                disabled={matchPaths.length <= 1}
+                                disabled={matchPaths.length <= 1 || !!isScrollingRef.current}
                                 aria-label="Next match"
                             >
                                <ChevronRight suppressHydrationWarning className="h-4 w-4" />
@@ -938,7 +1005,7 @@ const JsonExplorer: React.FC = () => {
                 placeholder="Enter JSON Path (e.g., $.users[*].name)"
                 className="flex-1 font-mono text-sm h-10"
                 aria-label="JSON Path Input"
-                disabled={error !== null}
+                disabled={error !== null || parsedJson === null}
               />
                 <Tooltip>
                     <TooltipTrigger asChild>
@@ -948,7 +1015,7 @@ const JsonExplorer: React.FC = () => {
                             onClick={handleCopy}
                             onContextMenu={handleContextMenuCopy}
                             aria-label="Copy Path or Result"
-                            disabled={error !== null}
+                            disabled={error !== null || parsedJson === null}
                          >
                            <ClipboardCopy suppressHydrationWarning className="h-4 w-4" />
                          </Button>
@@ -965,37 +1032,47 @@ const JsonExplorer: React.FC = () => {
                             size="icon"
                             onClick={togglePreviewDisplayMode}
                             aria-label="Toggle Preview Display Mode"
-                            disabled={error !== null || (!isArray(previewResult) && !isObject(previewResult))} // Disable if not array or object
+                            disabled={error !== null || parsedJson === null || (!isArray(previewResult) && !isObject(previewResult))} // Disable if not array or object
                          >
                             {previewDisplayMode === 'json' ? <Rows suppressHydrationWarning className="h-4 w-4" /> : <Binary suppressHydrationWarning className="h-4 w-4" />}
                          </Button>
                     </TooltipTrigger>
                      <TooltipContent side="bottom">
-                         {previewDisplayMode === 'tree' ? "Show as JSON" : "Show as List"}
+                         {previewDisplayMode === 'tree' && (isArray(previewResult) || isObject(previewResult)) ? "Show as JSON" : "Show as Tree"}
                      </TooltipContent>
                 </Tooltip>
             </div>
           </CardHeader>
           <CardContent className="flex-1 overflow-hidden p-0 px-4 pb-4">
-            <ScrollArea className="h-full border rounded-md p-2 bg-card">
+            <ScrollArea className="h-full border rounded-md p-2 bg-card" suppressHydrationWarning>
               {error ? (
                 <span className="text-destructive">Invalid JSON</span>
+              ) : parsedJson === null ? (
+                 <span className="text-muted-foreground">Enter valid JSON in the input panel</span>
+              ) : previewResult === undefined && jsonPath ? (
+                <span className="text-muted-foreground">No data found for path: {jsonPath}</span>
               ) : previewResult === undefined ? (
                 <span className="text-muted-foreground">Preview will appear here</span>
               ) : previewDisplayMode === 'tree' && (isArray(previewResult) || isObject(previewResult)) ? (
                 // Render array/object items as a list for tree-like view
                  <div className="flex flex-col space-y-1">
                     {(isArray(previewResult) ? previewResult : Object.entries(previewResult)).map((item, index) => {
-                       const displayValue = isArray(previewResult) ? item : `${item[0]}: ${JSON.stringify(item[1])}`;
-                       const key = isArray(previewResult) ? `${jsonPath}[${index}]` : `${jsonPath}.${item[0]}`; // Use jsonPath for stable key
-                       const valueToCopy = isArray(previewResult) ? item : item[1];
+                       const displayKey = isArray(previewResult) ? index : item[0];
+                       const displayValue = isArray(previewResult) ? item : item[1];
+                       const textValue = isArray(previewResult)
+                            ? (typeof item === 'object' ? JSON.stringify(item) : String(item))
+                            : `${item[0]}: ${typeof item[1] === 'object' ? JSON.stringify(item[1]) : String(item[1])}`;
+
+                       // Create a unique key for React list rendering
+                       const reactKey = `${jsonPath}-${displayKey}-${index}`;
+
                        return (
                            <div
-                               key={key}
-                               className="text-sm font-mono p-1 rounded hover:bg-muted/50 cursor-pointer break-words" // Added break-words
-                               onDoubleClick={() => handlePreviewItemDoubleClick(valueToCopy)}
+                               key={reactKey}
+                               className="text-sm font-mono p-1 rounded hover:bg-muted/50 cursor-pointer break-words"
+                               onDoubleClick={() => handlePreviewItemDoubleClick(displayValue)}
                            >
-                               {typeof displayValue === 'object' ? JSON.stringify(displayValue, null, 2) : String(displayValue)}
+                               {textValue}
                            </div>
                        );
                     })}
@@ -1015,3 +1092,4 @@ const JsonExplorer: React.FC = () => {
 };
 
 export default JsonExplorer;
+
