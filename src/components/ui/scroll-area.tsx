@@ -19,11 +19,12 @@ const ScrollArea = React.forwardRef<
     ref={ref}
     className={cn("relative overflow-hidden", className)}
     {...props}
+    suppressHydrationWarning // Add suppressHydrationWarning to the Root
   >
     <ScrollAreaPrimitive.Viewport
       ref={viewportRef} // Pass the viewportRef to the Viewport component
       className="h-full w-full rounded-[inherit]"
-      suppressHydrationWarning // Add suppressHydrationWarning here
+      suppressHydrationWarning // This was already here
       >
       {children}
     </ScrollAreaPrimitive.Viewport>
@@ -49,6 +50,7 @@ const ScrollBar = React.forwardRef<
       className
     )}
     {...props}
+    suppressHydrationWarning // Also add to Scrollbar for good measure
   >
     <ScrollAreaPrimitive.ScrollAreaThumb className="relative flex-1 rounded-full bg-border" />
   </ScrollAreaPrimitive.ScrollAreaScrollbar>
@@ -56,4 +58,3 @@ const ScrollBar = React.forwardRef<
 ScrollBar.displayName = ScrollAreaPrimitive.ScrollAreaScrollbar.displayName
 
 export { ScrollArea, ScrollBar }
-
