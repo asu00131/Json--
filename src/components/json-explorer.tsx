@@ -802,14 +802,22 @@ const JsonExplorer: React.FC = () => {
   return (
     <TooltipProvider>
       <div className="flex flex-col h-screen p-4 gap-2 bg-background">
-        <div className="text-center mb-2">
+        <div className="flex justify-between items-center mb-2">
             <a
               href="https://youming.cc.cd"
               target="_blank"
               rel="noopener noreferrer"
               className="text-primary hover:underline"
             >
-              详细教程
+              有明博客
+            </a>
+            <a
+              href="https://getquicker.net/Sharedaction?code=700ae7e6-a44d-4b67-ae0b-08de6bb9ccc4"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-primary hover:underline"
+            >
+              动作示例
             </a>
           </div>
         <div className="flex flex-col md:flex-row flex-1 gap-4 overflow-hidden">
@@ -1058,4 +1066,4 @@ const JsonExplorer: React.FC = () => {
 
 export default JsonExplorer;
 
-
+    
