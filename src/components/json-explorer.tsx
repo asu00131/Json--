@@ -530,7 +530,7 @@ const JsonExplorer: React.FC = () => {
             return newPaths;
         });
 
-    }, [viewMode, nodeElementRefs]);
+    }, [viewMode]);
 
 
     // Effect for performing search and setting initial state
@@ -679,15 +679,13 @@ const JsonExplorer: React.FC = () => {
   }, [previewResult, previewDisplayMode, copyToClipboard]);
 
   const navigateMatches = useCallback((direction: 'next' | 'prev') => {
-      if (matchPaths.length <= 0 || isScrollingRef.current) return; 
+      if (matchPaths.length <= 0) return; 
+      if (isScrollingRef.current) return;
 
-      let nextIndex;
-      if (direction === 'next') {
-          nextIndex = (currentMatchIndex + 1) % matchPaths.length;
-      } else {
-          nextIndex = (currentMatchIndex - 1 + matchPaths.length) % matchPaths.length;
-      }
-
+      const nextIndex = direction === 'next'
+          ? (currentMatchIndex + 1) % matchPaths.length
+          : (currentMatchIndex - 1 + matchPaths.length) % matchPaths.length;
+      
       const nextPath = matchPaths[nextIndex]?.path;
       if (!nextPath) return;
 
@@ -803,7 +801,18 @@ const JsonExplorer: React.FC = () => {
 
   return (
     <TooltipProvider>
-      <div className="flex flex-col md:flex-row h-screen p-4 gap-4 bg-background">
+      <div className="flex flex-col h-screen p-4 gap-2 bg-background">
+        <div className="text-center mb-2">
+            <a
+              href="https://youming.cc.cd"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-primary hover:underline"
+            >
+              详细教程
+            </a>
+          </div>
+        <div className="flex flex-col md:flex-row flex-1 gap-4 overflow-hidden">
         {/* Left Panel */}
         <Card className="flex-1 flex flex-col overflow-hidden">
           <CardHeader className="pb-2 pt-4 px-4">
@@ -898,7 +907,7 @@ const JsonExplorer: React.FC = () => {
                                 size="icon"
                                 className="h-8 w-8"
                                 onClick={handlePrevMatch}
-                                disabled={matchPaths.length <= 1 || !!isScrollingRef.current}
+                                disabled={matchPaths.length <= 1}
                                 aria-label="Previous match"
                             >
                                <ChevronLeft suppressHydrationWarning className="h-4 w-4" />
@@ -913,7 +922,7 @@ const JsonExplorer: React.FC = () => {
                                 size="icon"
                                 className="h-8 w-8"
                                 onClick={handleNextMatch}
-                                disabled={matchPaths.length <= 1 || !!isScrollingRef.current}
+                                disabled={matchPaths.length <= 1}
                                 aria-label="Next match"
                             >
                                <ChevronRight suppressHydrationWarning className="h-4 w-4" />
@@ -1020,7 +1029,7 @@ const JsonExplorer: React.FC = () => {
                             ? (typeof item === 'object' ? JSON.stringify(item) : String(item))
                             : `${item[0]}: ${typeof item[1] === 'object' ? JSON.stringify(item[1]) : String(item[1])}`;
 
-                       const reactKey = `${jsonPath}-${displayKey}-${index}-${Date.now()}`; // Add timestamp for more unique key
+                       const reactKey = `${jsonPath}-${displayKey}-${index}-${Math.random()}`;
 
                        return (
                            <div
@@ -1042,9 +1051,11 @@ const JsonExplorer: React.FC = () => {
           </CardContent>
         </Card>
       </div>
+      </div>
     </TooltipProvider>
   );
 };
 
 export default JsonExplorer;
+
 

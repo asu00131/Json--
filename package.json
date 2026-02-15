@@ -7,6 +7,8 @@
     "genkit:dev": "genkit start -- tsx src/ai/dev.ts",
     "genkit:watch": "genkit start -- tsx --watch src/ai/dev.ts",
     "build": "next build",
+    "postbuild": "npx @cloudflare/next-on-pages",
+    "deploy": "wrangler pages deploy ./.vercel/output",
     "start": "next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit"
@@ -44,7 +46,7 @@
     "genkit": "^1.6.2",
     "lodash-es": "^4.17.21",
     "lucide-react": "^0.475.0",
-    "next": "15.2.3",
+    "next": "15.2.8",
     "patch-package": "^8.0.0",
     "react": "^18.3.1",
     "react-day-picker": "^8.10.1",
@@ -56,6 +58,7 @@
     "zod": "^3.24.2"
   },
   "devDependencies": {
+    "@cloudflare/next-on-pages": "^1.13.0",
     "@types/lodash-es": "^4.17.12",
     "@types/node": "^20",
     "@types/react": "^18",
@@ -63,6 +66,7 @@
     "genkit-cli": "^1.6.1",
     "postcss": "^8",
     "tailwindcss": "^3.4.1",
-    "typescript": "^5"
+    "typescript": "^5",
+    "wrangler": "^3.62.0"
   }
 }
