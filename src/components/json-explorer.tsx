@@ -453,12 +453,12 @@ const JsonExplorer: React.FC = () => {
 
 
    // Scroll to the current match element
-    const scrollToMatch = useCallback((matchIndex: number) => {
-        if (matchIndex < 0 || matchIndex >= matchPaths.length || viewMode !== 'tree' || isScrollingRef.current) {
+    const scrollToMatch = useCallback((indexToScroll: number, paths: { path: string }[]) => {
+        if (indexToScroll < 0 || indexToScroll >= paths.length || viewMode !== 'tree' || isScrollingRef.current) {
             return;
         }
 
-        const currentMatchPath = matchPaths[matchIndex]?.path;
+        const currentMatchPath = paths[indexToScroll]?.path;
         if (!currentMatchPath) return;
 
         isScrollingRef.current = true; // Set scrolling flag
@@ -498,7 +498,7 @@ const JsonExplorer: React.FC = () => {
             }
         });
 
-    }, [matchPaths, viewMode]);
+    }, [viewMode]);
 
 
     // Effect for performing search and setting initial state
@@ -532,7 +532,7 @@ const JsonExplorer: React.FC = () => {
             setJsonPath(firstMatchPath); // Update path input to the first match
             // Use requestAnimationFrame to schedule scroll after render
             requestAnimationFrame(() => {
-                scrollToMatch(firstMatchIndex);
+                scrollToMatch(firstMatchIndex, results);
             });
 
         } else {
@@ -546,9 +546,7 @@ const JsonExplorer: React.FC = () => {
                 });
             }
         }
-    // IMPORTANT: Remove scrollToMatch from dependencies here to avoid loop
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [debouncedSearchTerm, parsedJson, error, toast, searchTerm]);
+    }, [debouncedSearchTerm, parsedJson, error, toast, searchTerm, scrollToMatch]);
 
 
   const handleInputChange = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -684,7 +682,7 @@ const JsonExplorer: React.FC = () => {
 
        // Use requestAnimationFrame to schedule scroll after state updates
         requestAnimationFrame(() => {
-            scrollToMatch(nextIndex);
+            scrollToMatch(nextIndex, matchPaths);
         });
   }, [matchPaths, currentMatchIndex, scrollToMatch, parsedJson]);
 
@@ -773,30 +771,120 @@ const JsonExplorer: React.FC = () => {
 
 
   return (
-    <TooltipProvider>
-      <div className="flex flex-col md:flex-row h-screen p-4 gap-4 bg-background">
-        {/* Left Panel */}
-        <Card className="flex-1 flex flex-col overflow-hidden">
-          <CardHeader className="pb-2 pt-4 px-4">
-            <div className="flex justify-between items-center mb-2">
-                <CardTitle className="text-lg">JSON Input / Tree View</CardTitle>
-                <div className="flex items-center space-x-1">
-                    {/* Expand/Collapse Buttons - only in Tree view and no error */}
-                    {viewMode === 'tree' && !error && parsedJson !== null && (
-                         <>
+    <div className="flex flex-col h-screen bg-background">
+        <header className="flex justify-between items-center px-4 py-2 border-b shrink-0">
+            <a href="https://youming.cc.cd" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
+                有明博客
+            </a>
+            <a href="https://getquicker.net/Sharedaction?code=700ae7e6-a44d-4b67-ae0b-08de6bb9ccc4" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
+                动作示例
+            </a>
+        </header>
+        <TooltipProvider>
+            <div className="flex flex-col md:flex-row flex-1 p-4 gap-4 overflow-hidden">
+                {/* Left Panel */}
+                <Card className="flex-1 flex flex-col overflow-hidden">
+                <CardHeader className="pb-2 pt-4 px-4">
+                    <div className="flex justify-between items-center mb-2">
+                        <CardTitle className="text-lg">JSON Input / Tree View</CardTitle>
+                        <div className="flex items-center space-x-1">
+                            {/* Expand/Collapse Buttons - only in Tree view and no error */}
+                            {viewMode === 'tree' && !error && parsedJson !== null && (
+                                <>
+                                    <Tooltip>
+                                        <TooltipTrigger asChild>
+                                            <Button
+                                                variant="ghost"
+                                                size="icon"
+                                                className="h-8 w-8"
+                                                onClick={handleExpandAll}
+                                                aria-label="Expand All Nodes"
+                                            >
+                                                <ChevronsUpDown suppressHydrationWarning className="h-4 w-4" />
+                                            </Button>
+                                        </TooltipTrigger>
+                                        <TooltipContent>Expand All</TooltipContent>
+                                    </Tooltip>
+                                    <Tooltip>
+                                        <TooltipTrigger asChild>
+                                            <Button
+                                                variant="ghost"
+                                                size="icon"
+                                                className="h-8 w-8"
+                                                onClick={handleCollapseAll}
+                                                aria-label="Collapse All Nodes"
+                                            >
+                                                <ChevronsDownUp suppressHydrationWarning className="h-4 w-4" />
+                                            </Button>
+                                        </TooltipTrigger>
+                                        <TooltipContent>Collapse All</TooltipContent>
+                                    </Tooltip>
+                                </>
+                            )}
+                            {/* Tree/Edit View Toggle Buttons */}
+                            <Tooltip>
+                                <TooltipTrigger asChild>
+                                    <Button
+                                        variant={viewMode === 'tree' ? 'secondary': 'ghost'}
+                                        size="icon"
+                                        className="h-8 w-8"
+                                        onClick={() => setViewMode('tree')}
+                                        disabled={error !== null}
+                                        aria-label="Switch to Tree View"
+                                    >
+                                        <Rows suppressHydrationWarning className="h-4 w-4" />
+                                    </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>Tree View</TooltipContent>
+                            </Tooltip>
+                            <Tooltip>
+                                <TooltipTrigger asChild>
+                                    <Button
+                                        variant={viewMode === 'edit' ? 'secondary': 'ghost'}
+                                        size="icon"
+                                        className="h-8 w-8"
+                                        onClick={() => setViewMode('edit')}
+                                        aria-label="Switch to Edit JSON View"
+                                    >
+                                        <Pencil suppressHydrationWarning className="h-4 w-4" />
+                                    </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>Edit JSON</TooltipContent>
+                            </Tooltip>
+                        </div>
+                    </div>
+                    {viewMode === 'tree' && !error && (
+                        <div className="flex items-center space-x-2">
+                            <Search suppressHydrationWarning className="h-4 w-4 text-muted-foreground" />
+                            <Input
+                                ref={searchInputRef} // Assign ref
+                                type="text"
+                                placeholder="Search key or value (Enter for next)..." // Updated placeholder
+                                value={searchTerm}
+                                onChange={(e) => setSearchTerm(e.target.value)}
+                                onKeyDown={handleSearchKeyDown} // Add keydown handler
+                                className="h-8 text-sm flex-1"
+                                aria-label="Search JSON Tree"
+                            />
+                            {matchPaths.length > 0 && (
+                                <span className="text-xs text-muted-foreground whitespace-nowrap" aria-live="polite">
+                                    {currentMatchIndex + 1} / {matchPaths.length}
+                                </span>
+                            )}
                             <Tooltip>
                                 <TooltipTrigger asChild>
                                     <Button
                                         variant="ghost"
                                         size="icon"
                                         className="h-8 w-8"
-                                        onClick={handleExpandAll}
-                                        aria-label="Expand All Nodes"
+                                        onClick={handlePrevMatch}
+                                        disabled={matchPaths.length <= 1}
+                                        aria-label="Previous match"
                                     >
-                                        <ChevronsUpDown suppressHydrationWarning className="h-4 w-4" />
+                                    <ChevronLeft suppressHydrationWarning className="h-4 w-4" />
                                     </Button>
                                 </TooltipTrigger>
-                                <TooltipContent>Expand All</TooltipContent>
+                                <TooltipContent>Previous Match</TooltipContent>
                             </Tooltip>
                             <Tooltip>
                                 <TooltipTrigger asChild>
@@ -804,213 +892,133 @@ const JsonExplorer: React.FC = () => {
                                         variant="ghost"
                                         size="icon"
                                         className="h-8 w-8"
-                                        onClick={handleCollapseAll}
-                                        aria-label="Collapse All Nodes"
+                                        onClick={handleNextMatch}
+                                        disabled={matchPaths.length <= 1}
+                                        aria-label="Next match"
                                     >
-                                        <ChevronsDownUp suppressHydrationWarning className="h-4 w-4" />
+                                    <ChevronRight suppressHydrationWarning className="h-4 w-4" />
                                     </Button>
                                 </TooltipTrigger>
-                                <TooltipContent>Collapse All</TooltipContent>
+                                <TooltipContent>Next Match</TooltipContent>
                             </Tooltip>
-                         </>
-                     )}
-                    {/* Tree/Edit View Toggle Buttons */}
-                    <Tooltip>
-                        <TooltipTrigger asChild>
-                            <Button
-                                variant={viewMode === 'tree' ? 'secondary': 'ghost'}
-                                size="icon"
-                                className="h-8 w-8"
-                                onClick={() => setViewMode('tree')}
-                                disabled={error !== null}
-                                aria-label="Switch to Tree View"
-                            >
-                                <Rows suppressHydrationWarning className="h-4 w-4" />
-                            </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>Tree View</TooltipContent>
-                    </Tooltip>
-                    <Tooltip>
-                        <TooltipTrigger asChild>
-                            <Button
-                                variant={viewMode === 'edit' ? 'secondary': 'ghost'}
-                                size="icon"
-                                className="h-8 w-8"
-                                onClick={() => setViewMode('edit')}
-                                aria-label="Switch to Edit JSON View"
-                            >
-                                <Pencil suppressHydrationWarning className="h-4 w-4" />
-                            </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>Edit JSON</TooltipContent>
-                    </Tooltip>
-                </div>
-            </div>
-             {viewMode === 'tree' && !error && (
-                <div className="flex items-center space-x-2">
-                    <Search suppressHydrationWarning className="h-4 w-4 text-muted-foreground" />
-                    <Input
-                        ref={searchInputRef} // Assign ref
-                        type="text"
-                        placeholder="Search key or value (Enter for next)..." // Updated placeholder
-                        value={searchTerm}
-                        onChange={(e) => setSearchTerm(e.target.value)}
-                        onKeyDown={handleSearchKeyDown} // Add keydown handler
-                        className="h-8 text-sm flex-1"
-                        aria-label="Search JSON Tree"
-                    />
-                     {matchPaths.length > 0 && (
-                        <span className="text-xs text-muted-foreground whitespace-nowrap" aria-live="polite">
-                            {currentMatchIndex + 1} / {matchPaths.length}
-                        </span>
-                    )}
-                    <Tooltip>
-                        <TooltipTrigger asChild>
-                             <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-8 w-8"
-                                onClick={handlePrevMatch}
-                                disabled={matchPaths.length <= 1}
-                                aria-label="Previous match"
-                            >
-                               <ChevronLeft suppressHydrationWarning className="h-4 w-4" />
-                            </Button>
-                        </TooltipTrigger>
-                         <TooltipContent>Previous Match</TooltipContent>
-                    </Tooltip>
-                     <Tooltip>
-                        <TooltipTrigger asChild>
-                             <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-8 w-8"
-                                onClick={handleNextMatch}
-                                disabled={matchPaths.length <= 1}
-                                aria-label="Next match"
-                            >
-                               <ChevronRight suppressHydrationWarning className="h-4 w-4" />
-                            </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>Next Match</TooltipContent>
-                    </Tooltip>
-                </div>
-             )}
-          </CardHeader>
-          <CardContent className="flex-1 flex flex-col overflow-hidden p-0 px-4 pb-4">
-
-            {viewMode === 'edit' && (
-                 <Textarea
-                    value={jsonInput}
-                    onChange={handleInputChange}
-                    placeholder="Paste your JSON here"
-                    className="flex-1 resize-none font-mono text-sm bg-card border rounded-md p-2"
-                    aria-label="JSON Input"
-                />
-            )}
-             {viewMode === 'tree' && (
-                 <ScrollArea className="flex-1 border rounded-md p-2 bg-card" viewportRef={scrollAreaRef}>
-                     {parsedJson !== null && error === null ? (
-                        renderTree(parsedJson, 0, '$')
-                    ) : (
-                        <div className="text-muted-foreground p-4 text-center">
-                            {error ? 'Invalid JSON format. Please correct it in Edit mode.' : 'Enter JSON in Edit mode to view the tree.'}
                         </div>
                     )}
-                 </ScrollArea>
-             )}
+                </CardHeader>
+                <CardContent className="flex-1 flex flex-col overflow-hidden p-0 px-4 pb-4">
 
-             {error && viewMode === 'edit' && (
-                <p className="text-destructive text-xs mt-1 px-1">{error}</p>
-             )}
-          </CardContent>
-        </Card>
+                    {viewMode === 'edit' && (
+                        <Textarea
+                            value={jsonInput}
+                            onChange={handleInputChange}
+                            placeholder="Paste your JSON here"
+                            className="flex-1 resize-none font-mono text-sm bg-card border rounded-md p-2"
+                            aria-label="JSON Input"
+                        />
+                    )}
+                    {viewMode === 'tree' && (
+                        <ScrollArea className="flex-1 border rounded-md p-2 bg-card" viewportRef={scrollAreaRef}>
+                            {parsedJson !== null && error === null ? (
+                                renderTree(parsedJson, 0, '$')
+                            ) : (
+                                <div className="text-muted-foreground p-4 text-center">
+                                    {error ? 'Invalid JSON format. Please correct it in Edit mode.' : 'Enter JSON in Edit mode to view the tree.'}
+                                </div>
+                            )}
+                        </ScrollArea>
+                    )}
 
-        {/* Right Panel */}
-        <Card className="flex-1 flex flex-col overflow-hidden">
-          <CardHeader className="pb-2 pt-4 px-4">
-            <CardTitle className="text-lg mb-2">JSON Path & Preview</CardTitle>
-            <div className="flex items-center space-x-2">
-              <Input
-                type="text"
-                value={jsonPath}
-                onChange={handlePathChange}
-                placeholder="Enter JSON Path (e.g., $.users[*].name)"
-                className="flex-1 font-mono text-sm h-10"
-                aria-label="JSON Path Input"
-                disabled={error !== null}
-              />
-                <Tooltip>
-                    <TooltipTrigger asChild>
-                         <Button
-                            variant="outline"
-                            size="icon"
-                            onClick={handleCopy}
-                            onContextMenu={handleContextMenuCopy}
-                            aria-label="Copy Path or Result"
-                            disabled={error !== null}
-                         >
-                           <ClipboardCopy suppressHydrationWarning className="h-4 w-4" />
-                         </Button>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom">
-                        <p>Left Click: Copy Path</p>
-                        <p>Right Click: Copy Result</p>
-                    </TooltipContent>
-                </Tooltip>
-                 <Tooltip>
-                    <TooltipTrigger asChild>
-                         <Button
-                            variant="outline"
-                            size="icon"
-                            onClick={togglePreviewDisplayMode}
-                            aria-label="Toggle Preview Display Mode"
-                            disabled={error !== null || (!isArray(previewResult) && !isObject(previewResult))} // Disable if not array or object
-                         >
-                            {previewDisplayMode === 'json' ? <Rows suppressHydrationWarning className="h-4 w-4" /> : <Binary suppressHydrationWarning className="h-4 w-4" />}
-                         </Button>
-                    </TooltipTrigger>
-                     <TooltipContent side="bottom">
-                         {previewDisplayMode === 'tree' ? "Show as JSON" : "Show as List"}
-                     </TooltipContent>
-                </Tooltip>
+                    {error && viewMode === 'edit' && (
+                        <p className="text-destructive text-xs mt-1 px-1">{error}</p>
+                    )}
+                </CardContent>
+                </Card>
+
+                {/* Right Panel */}
+                <Card className="flex-1 flex flex-col overflow-hidden">
+                <CardHeader className="pb-2 pt-4 px-4">
+                    <CardTitle className="text-lg mb-2">JSON Path & Preview</CardTitle>
+                    <div className="flex items-center space-x-2">
+                    <Input
+                        type="text"
+                        value={jsonPath}
+                        onChange={handlePathChange}
+                        placeholder="Enter JSON Path (e.g., $.users[*].name)"
+                        className="flex-1 font-mono text-sm h-10"
+                        aria-label="JSON Path Input"
+                        disabled={error !== null}
+                    />
+                        <Tooltip>
+                            <TooltipTrigger asChild>
+                                <Button
+                                    variant="outline"
+                                    size="icon"
+                                    onClick={handleCopy}
+                                    onContextMenu={handleContextMenuCopy}
+                                    aria-label="Copy Path or Result"
+                                    disabled={error !== null}
+                                >
+                                <ClipboardCopy suppressHydrationWarning className="h-4 w-4" />
+                                </Button>
+                            </TooltipTrigger>
+                            <TooltipContent side="bottom">
+                                <p>Left Click: Copy Path</p>
+                                <p>Right Click: Copy Result</p>
+                            </TooltipContent>
+                        </Tooltip>
+                        <Tooltip>
+                            <TooltipTrigger asChild>
+                                <Button
+                                    variant="outline"
+                                    size="icon"
+                                    onClick={togglePreviewDisplayMode}
+                                    aria-label="Toggle Preview Display Mode"
+                                    disabled={error !== null || (!isArray(previewResult) && !isObject(previewResult))} // Disable if not array or object
+                                >
+                                    {previewDisplayMode === 'json' ? <Rows suppressHydrationWarning className="h-4 w-4" /> : <Binary suppressHydrationWarning className="h-4 w-4" />}
+                                </Button>
+                            </TooltipTrigger>
+                            <TooltipContent side="bottom">
+                                {previewDisplayMode === 'tree' ? "Show as JSON" : "Show as List"}
+                            </TooltipContent>
+                        </Tooltip>
+                    </div>
+                </CardHeader>
+                <CardContent className="flex-1 overflow-hidden p-0 px-4 pb-4">
+                    <ScrollArea className="h-full border rounded-md p-2 bg-card">
+                    {error ? (
+                        <span className="text-destructive">Invalid JSON</span>
+                    ) : previewResult === undefined ? (
+                        <span className="text-muted-foreground">Preview will appear here</span>
+                    ) : previewDisplayMode === 'tree' && (isArray(previewResult) || isObject(previewResult)) ? (
+                        // Render array/object items as a list for tree-like view
+                        <div className="flex flex-col space-y-1">
+                            {(isArray(previewResult) ? previewResult : Object.entries(previewResult)).map((item, index) => {
+                            const displayValue = isArray(previewResult) ? item : `${item[0]}: ${JSON.stringify(item[1])}`;
+                            const key = isArray(previewResult) ? `${jsonPath}[${index}]` : `${jsonPath}.${item[0]}`; // Use jsonPath for stable key
+                            const valueToCopy = isArray(previewResult) ? item : item[1];
+                            return (
+                                <div
+                                    key={key}
+                                    className="text-sm font-mono p-1 rounded hover:bg-muted/50 cursor-pointer break-words" // Added break-words
+                                    onDoubleClick={() => handlePreviewItemDoubleClick(valueToCopy)}
+                                >
+                                    {typeof displayValue === 'object' ? JSON.stringify(displayValue, null, 2) : String(displayValue)}
+                                </div>
+                            );
+                            })}
+                        </div>
+                    ) : (
+                        // Render as JSON string
+                        <pre className="text-sm font-mono whitespace-pre-wrap break-words">
+                        {JSON.stringify(previewResult, null, 2)}
+                        </pre>
+                    )}
+                    </ScrollArea>
+                </CardContent>
+                </Card>
             </div>
-          </CardHeader>
-          <CardContent className="flex-1 overflow-hidden p-0 px-4 pb-4">
-            <ScrollArea className="h-full border rounded-md p-2 bg-card">
-              {error ? (
-                <span className="text-destructive">Invalid JSON</span>
-              ) : previewResult === undefined ? (
-                <span className="text-muted-foreground">Preview will appear here</span>
-              ) : previewDisplayMode === 'tree' && (isArray(previewResult) || isObject(previewResult)) ? (
-                // Render array/object items as a list for tree-like view
-                 <div className="flex flex-col space-y-1">
-                    {(isArray(previewResult) ? previewResult : Object.entries(previewResult)).map((item, index) => {
-                       const displayValue = isArray(previewResult) ? item : `${item[0]}: ${JSON.stringify(item[1])}`;
-                       const key = isArray(previewResult) ? `${jsonPath}[${index}]` : `${jsonPath}.${item[0]}`; // Use jsonPath for stable key
-                       const valueToCopy = isArray(previewResult) ? item : item[1];
-                       return (
-                           <div
-                               key={key}
-                               className="text-sm font-mono p-1 rounded hover:bg-muted/50 cursor-pointer break-words" // Added break-words
-                               onDoubleClick={() => handlePreviewItemDoubleClick(valueToCopy)}
-                           >
-                               {typeof displayValue === 'object' ? JSON.stringify(displayValue, null, 2) : String(displayValue)}
-                           </div>
-                       );
-                    })}
-                 </div>
-              ) : (
-                // Render as JSON string
-                <pre className="text-sm font-mono whitespace-pre-wrap break-words">
-                  {JSON.stringify(previewResult, null, 2)}
-                </pre>
-              )}
-            </ScrollArea>
-          </CardContent>
-        </Card>
-      </div>
-    </TooltipProvider>
+        </TooltipProvider>
+    </div>
   );
 };
 
