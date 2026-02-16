@@ -7,7 +7,7 @@
     "genkit:dev": "genkit start -- tsx src/ai/dev.ts",
     "genkit:watch": "genkit start -- tsx --watch src/ai/dev.ts",
     "build": "next build",
-    "start": "next start",
+    "deploy": "npm run build && wrangler pages deploy out",
     "lint": "next lint",
     "typecheck": "tsc --noEmit"
   },
@@ -44,7 +44,7 @@
     "genkit": "^1.6.2",
     "lodash-es": "^4.17.21",
     "lucide-react": "^0.475.0",
-    "next": "15.2.3",
+    "next": "15.2.9",
     "patch-package": "^8.0.0",
     "react": "^18.3.1",
     "react-day-picker": "^8.10.1",
@@ -63,6 +63,7 @@
     "genkit-cli": "^1.6.1",
     "postcss": "^8",
     "tailwindcss": "^3.4.1",
-    "typescript": "^5"
+    "typescript": "^5",
+    "wrangler": "^4.65.0"
   }
 }
