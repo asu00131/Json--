@@ -406,8 +406,6 @@ const JsonExplorer: React.FC = () => {
       nodeElementRefs.current = new Map(); // Reset refs
       // Set initial preview mode based on root type
       setPreviewDisplayMode(isArray(parsed) || isObject(parsed) ? 'tree' : 'json'); // Default to tree if object/array
-       // Re-run search if needed after JSON updates
-       setDebouncedSearchTerm(searchTerm);
     } catch (e: any) {
       setError(`Invalid JSON: ${e.message}`);
       setParsedJson(null);
@@ -418,7 +416,7 @@ const JsonExplorer: React.FC = () => {
       nodeElementRefs.current = new Map();
       setPreviewDisplayMode('json'); // Reset preview mode on error
     }
-  }, [jsonInput, searchTerm]); // Keep searchTerm dependency here
+  }, [jsonInput]);
 
  // Effect for updating preview using the custom path evaluation
  useEffect(() => {
@@ -537,7 +535,7 @@ const JsonExplorer: React.FC = () => {
 
         } else {
             // No results found
-            if (searchTerm) { // Only toast if user actually searched for something
+            if (debouncedSearchTerm) { // Only toast if user actually searched for something
                 toast({
                     title: "Search",
                     description: "No matches found.",
@@ -546,7 +544,7 @@ const JsonExplorer: React.FC = () => {
                 });
             }
         }
-    }, [debouncedSearchTerm, parsedJson, error, toast, searchTerm, scrollToMatch]);
+    }, [debouncedSearchTerm, parsedJson, error, toast, scrollToMatch]);
 
 
   const handleInputChange = (event: React.ChangeEvent<HTMLTextAreaElement>) => {
